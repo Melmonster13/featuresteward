@@ -92,25 +92,47 @@ make seed
 
 ## The `stew` CLI
 
-Install:
+Install (needs Go 1.27.1 or later), or run `make stew` to build `bin/stew` from a checkout:
 
 ```bash
 go install github.com/Melmonster13/featuresteward/cmd/stew@latest
-stew login --url http://localhost:8080
 ```
+
+Log in with an API token. `stew` reads it from stdin, not a flag, so it stays out of your shell history:
+
+```bash
+stew login --url http://localhost:8080   # paste the token at the prompt
+stew whoami
+```
+
+The token is saved to `~/.config/stew/config.json` (mode `0600`). `stew logout` revokes it on the server and deletes the file. In CI, set `STEW_URL` and `STEW_TOKEN` instead. `stew` refuses to send a token over plain `http` except to `localhost`.
 
 Common commands:
 
 ```bash
-stew list --env dev                      # list flags in an environment
-stew status new-checkout                 # state per environment + steward
-stew toggle new-checkout --env dev       # flip a flag (dev/staging)
-stew rollout new-checkout 25 --env prod  # request a 25% prod rollout (needs approval)
-stew stale                               # flags that look safe to remove
-stew steward new-checkout @mel           # assign a flag's steward
+stew list --env dev                        # flags in an environment
+stew list --steward none                   # flags with no active steward
+stew status new-checkout                   # state per environment, rules, steward
+stew create new-checkout --name "New checkout"
+stew rollout new-checkout staging 25       # 25% of users
+stew toggle new-checkout staging on
+stew steward new-checkout @sam             # hand the flag to another steward
+stew archive new-checkout --yes            # admins only
 ```
 
-Production changes made with `stew` go through the same approval workflow as the dashboard.
+`toggle` and `rollout` change one setting and keep the rest, including targeting rules. Every change carries an `Idempotency-Key`, so `stew` retries network errors and 502/503/504 responses without applying a change twice. Until approvals ship, only admins can change `prod`.
+
+For scripts, most commands take `--json`, and exit codes tell failures apart:
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Other error |
+| 2 | Bad usage |
+| 3 | Not logged in, or not allowed |
+| 4 | Flag or environment not found |
+
+`stew stale` arrives with stale-flag detection (Milestone 7).
 
 ---
 
@@ -217,7 +239,7 @@ make test         # unit tests
 make test-int     # integration tests (requires Docker)
 ```
 
-CI runs linting, tests, and a Docker build on every pull request.
+CI runs `go vet`, unit and integration tests, a vulnerability scan, a secret scan, a Docker build, and a `stew` build for Linux, macOS, and Windows on every pull request.
 
 ---
 

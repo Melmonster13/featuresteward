@@ -1,4 +1,4 @@
-.PHONY: run test test-int lint build up down migrate migrate-down admin generate
+.PHONY: run test test-int lint build stew up down migrate migrate-down admin generate
 
 DATABASE_URL ?= postgres://featuresteward:featuresteward@localhost:5432/featuresteward?sslmode=disable
 SQLC_IMAGE := sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537
@@ -21,6 +21,9 @@ lint:
 
 build:
 	docker build -t featuresteward .
+
+stew:
+	go build -o bin/stew ./cmd/stew
 
 up:
 	docker compose up --build

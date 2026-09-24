@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -416,4 +417,18 @@ func flagErr(err error, key string) error {
 		return notFound("flag %q not found", key)
 	}
 	return err
+}
+
+// cmdVersion prints the module version: a tag or a commit-based
+// pseudo-version, plus "+dirty" for a build with uncommitted changes.
+func cmdVersion(e *env, args []string) error {
+	if err := e.parse(e.flags("version"), args); err != nil {
+		return err
+	}
+	v := "unknown"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		v = info.Main.Version
+	}
+	fmt.Fprintln(e.stdout, "stew", v)
+	return nil
 }

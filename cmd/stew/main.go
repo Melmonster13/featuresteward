@@ -33,6 +33,7 @@ Usage:
   stew rollout <flag> <env> <percent>       set the percentage rollout
   stew steward <flag> <handle>              reassign the flag's steward
   stew archive <flag> --yes                 archive a flag (admins only)
+  stew version                              show the stew version
 
 whoami, list, status, create, toggle, rollout, and steward take --json.
 
@@ -112,6 +113,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 		"rollout": cmdRollout,
 		"steward": cmdSteward,
 		"archive": cmdArchive,
+		"version": cmdVersion,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {

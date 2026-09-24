@@ -38,6 +38,11 @@ jobs:
       - name: Check generated SQL code is up to date
         run: docker run --rm -v "$PWD":/src:ro -w /src sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537 diff
       - run: go tool govulncheck ./...
+      - name: Build stew for each platform
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -o /dev/null ./cmd/stew
+          done
       - run: docker build -t featuresteward .
 
   secrets:

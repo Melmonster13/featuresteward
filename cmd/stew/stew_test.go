@@ -96,6 +96,9 @@ func TestHelpAndUsageErrors(t *testing.T) {
 	if code, _, _ := h.stew("", "list", "--nope"); code != 2 {
 		t.Errorf("bad flag = %d", code)
 	}
+	if code, out, _ := h.stew("", "version"); code != 0 || !strings.HasPrefix(out, "stew ") {
+		t.Errorf("version = %d %q", code, out)
+	}
 	if code, _, _ := h.stew("", "whoami", "extra"); code != 2 {
 		t.Errorf("extra arg = %d", code)
 	}
