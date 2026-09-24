@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,6 +159,54 @@ func (m *Memory) GetEnvironment(_ context.Context, key string) (flag.Environment
 	return flag.Environment{}, flag.ErrNotFound
 }
 
+func (m *Memory) CreateEnvironment(_ context.Context, actor string, env flag.Environment) (flag.Environment, error) {
+	if err := env.Validate(); err != nil {
+		return flag.Environment{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.envs {
+		if e.Key == env.Key {
+			return flag.Environment{}, flag.ErrConflict
+		}
+	}
+	m.envs = append(m.envs, env)
+	slices.SortFunc(m.envs, func(a, b flag.Environment) int { return strings.Compare(a.Key, b.Key) })
+	for _, f := range m.flags {
+		f.Environments[env.Key] = flag.EnvConfig{RolloutPercentage: 100, Rules: []eval.Rule{}}
+	}
+	m.auditEnv(actor, flag.ActionEnvironmentCreated, env.Key, nil, env)
+	return env, nil
+}
+
+func (m *Memory) UpdateEnvironmentSettings(_ context.Context, actor string, env flag.Environment) (flag.Environment, error) {
+	if err := env.Validate(); err != nil {
+		return flag.Environment{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, e := range m.envs {
+		if e.Key == env.Key {
+			m.envs[i] = env
+			m.auditEnv(actor, flag.ActionEnvironmentUpdated, env.Key, e, env)
+			return env, nil
+		}
+	}
+	return flag.Environment{}, flag.ErrNotFound
+}
+
+func (m *Memory) ListEnvironmentAuditEvents(_ context.Context, env string) ([]audit.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []audit.Event{}
+	for _, e := range m.events {
+		if e.Environment == env && e.FlagKey == "" {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
 func (m *Memory) ListAuditEvents(_ context.Context, flagKey string) ([]audit.Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -185,6 +234,13 @@ func (m *Memory) audit(actor, action, key, env string, before, after any) {
 	m.events = append(m.events, audit.Event{
 		ID: int64(len(m.events) + 1), OccurredAt: time.Now(), Actor: actor, Action: action,
 		FlagKey: key, Environment: env, Before: marshalOrNil(before), After: marshalOrNil(after),
+	})
+}
+
+func (m *Memory) auditEnv(actor, action, env string, before, after any) {
+	m.events = append(m.events, audit.Event{
+		ID: int64(len(m.events) + 1), OccurredAt: time.Now(), Actor: actor, Action: action,
+		Environment: env, Before: marshalOrNil(before), After: marshalOrNil(after),
 	})
 }
 

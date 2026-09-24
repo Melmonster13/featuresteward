@@ -52,6 +52,24 @@ SELECT * FROM environments ORDER BY key;
 -- name: GetEnvironment :one
 SELECT * FROM environments WHERE key = $1;
 
+-- name: GetEnvironmentForUpdate :one
+SELECT * FROM environments WHERE key = $1 FOR UPDATE;
+
+-- name: CreateEnvironment :one
+INSERT INTO environments (key, name, protected)
+VALUES ($1, $2, $3)
+RETURNING *;
+
+-- Gives every existing flag (archived too) default settings in a new environment.
+-- name: BackfillFlagEnvironments :exec
+INSERT INTO flag_environments (flag_id, environment)
+SELECT id, $1 FROM flags;
+
+-- name: UpdateEnvironmentSettings :one
+UPDATE environments SET name = $2, protected = $3
+WHERE key = $1
+RETURNING *;
+
 -- name: InsertAuditEvent :exec
 INSERT INTO audit_events (actor, action, flag_key, environment, before, after)
 VALUES ($1, $2, $3, $4, $5, $6);

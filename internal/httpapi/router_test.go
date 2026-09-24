@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -329,8 +330,8 @@ func TestInternalErrorsAreHidden(t *testing.T) {
 	}
 }
 
-// TestRolePermissions checks every route against every role. Add new
-// routes here.
+// TestRolePermissions checks every route against every role, and that a
+// denied request changes nothing. Add new routes here.
 func TestRolePermissions(t *testing.T) {
 	routes := []struct {
 		method, path, body string
@@ -342,21 +343,54 @@ func TestRolePermissions(t *testing.T) {
 		{"GET", "/api/v1/flags/new-checkout", "", auth.RoleViewer, 200},
 		{"GET", "/api/v1/flags/new-checkout/audit", "", auth.RoleViewer, 200},
 		{"POST", "/api/v1/evaluate", `{"flag":"new-checkout","environment":"prod"}`, auth.RoleViewer, 200},
+		{"GET", "/api/v1/me", "", auth.RoleViewer, 200},
+		{"GET", "/api/v1/me/tokens", "", auth.RoleViewer, 200},
+		{"POST", "/api/v1/me/tokens", `{"name":"cli"}`, auth.RoleViewer, 201},
+		{"DELETE", "/api/v1/me/tokens/{myToken}", "", auth.RoleViewer, 204},
+
 		{"POST", "/api/v1/flags", `{"key":"another","name":"Another"}`, auth.RoleEditor, 201},
 		{"PUT", "/api/v1/flags/new-checkout", `{"name":"Renamed"}`, auth.RoleEditor, 200},
 		{"PUT", "/api/v1/flags/new-checkout/environments/dev", `{"enabled":true,"rollout_percentage":50}`, auth.RoleEditor, 200},
 		{"PUT", "/api/v1/flags/new-checkout/environments/staging", `{"enabled":true,"rollout_percentage":50}`, auth.RoleEditor, 200},
+
 		{"PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":50}`, auth.RoleAdmin, 200},
 		{"DELETE", "/api/v1/flags/new-checkout", "", auth.RoleAdmin, 204},
+		{"GET", "/api/v1/users", "", auth.RoleAdmin, 200},
+		{"POST", "/api/v1/users", `{"handle":"new","role":"viewer"}`, auth.RoleAdmin, 201},
+		{"GET", "/api/v1/users/sam", "", auth.RoleAdmin, 200},
+		{"PUT", "/api/v1/users/sam/role", `{"role":"viewer"}`, auth.RoleAdmin, 200},
+		{"DELETE", "/api/v1/users/sam", "", auth.RoleAdmin, 204},
+		{"GET", "/api/v1/users/sam/audit", "", auth.RoleAdmin, 200},
+		{"GET", "/api/v1/users/sam/tokens", "", auth.RoleAdmin, 200},
+		{"POST", "/api/v1/users/sam/tokens", `{"name":"onboarding"}`, auth.RoleAdmin, 201},
+		{"DELETE", "/api/v1/users/sam/tokens/{samToken}", "", auth.RoleAdmin, 204},
+		{"GET", "/api/v1/sdk-keys", "", auth.RoleAdmin, 200},
+		{"POST", "/api/v1/sdk-keys", `{"environment":"prod","name":"svc"}`, auth.RoleAdmin, 201},
+		{"DELETE", "/api/v1/sdk-keys/{sdkKey}", "", auth.RoleAdmin, 204},
+		{"POST", "/api/v1/environments", `{"key":"qa","name":"QA","protected":false}`, auth.RoleAdmin, 201},
+		{"PUT", "/api/v1/environments/staging", `{"name":"Staging","protected":true}`, auth.RoleAdmin, 200},
 	}
+	ctx := context.Background()
 	for _, role := range []auth.Role{auth.RoleViewer, auth.RoleEditor, auth.RoleApprover, auth.RoleAdmin} {
 		for _, rt := range routes {
 			t.Run(string(role)+" "+rt.method+" "+rt.path, func(t *testing.T) {
 				c := newClient(t, flagtest.NewMemory())
 				c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
-				before := c.mustDo("GET", "/api/v1/flags/new-checkout/audit", "", 200)
+				c.newUser("sam", auth.RoleEditor)
+				c.newSDKKey("prod")
+				u := c.as(c.newUser("u", role))
 
-				code, out := c.as(c.newUser("u", role)).do(rt.method, rt.path, rt.body)
+				samToks, _ := c.users.ListTokens(ctx, "sam")
+				myToks, _ := c.users.ListTokens(ctx, "u")
+				keys, _ := c.users.ListSDKKeys(ctx)
+				path := strings.NewReplacer(
+					"{samToken}", strconv.FormatInt(samToks[0].ID, 10),
+					"{myToken}", strconv.FormatInt(myToks[0].ID, 10),
+					"{sdkKey}", strconv.FormatInt(keys[0].ID, 10),
+				).Replace(rt.path)
+
+				before := snapshot(t, c)
+				code, out := u.do(rt.method, path, rt.body)
 				want := rt.want
 				if !role.AtLeast(rt.min) {
 					want = 403
@@ -364,15 +398,27 @@ func TestRolePermissions(t *testing.T) {
 				if code != want {
 					t.Fatalf("got %d %v, want %d", code, out, want)
 				}
-				if code == 403 {
-					after := c.mustDo("GET", "/api/v1/flags/new-checkout/audit", "", 200)
-					if len(after["events"].([]any)) != len(before["events"].([]any)) {
-						t.Errorf("denied request changed the audit log")
-					}
+				if code == 403 && snapshot(t, c) != before {
+					t.Errorf("denied request changed state")
 				}
 			})
 		}
 	}
+}
+
+// snapshot captures everything the routes can change, as seen by admin mel.
+func snapshot(t *testing.T, c *client) string {
+	t.Helper()
+	var b strings.Builder
+	for _, path := range []string{
+		"/api/v1/flags/new-checkout", "/api/v1/flags/new-checkout/audit", "/api/v1/flags",
+		"/api/v1/users", "/api/v1/users/sam/audit", "/api/v1/users/sam/tokens",
+		"/api/v1/sdk-keys", "/api/v1/environments",
+	} {
+		out, _ := json.Marshal(c.mustDo("GET", path, "", 200))
+		b.Write(out)
+	}
+	return b.String()
 }
 
 func TestEnvironmentsShowProtection(t *testing.T) {
@@ -386,4 +432,154 @@ func TestEnvironmentsShowProtection(t *testing.T) {
 	if len(prot) != 3 || !prot["prod"] || prot["dev"] || prot["staging"] {
 		t.Fatalf("environments = %v", envs)
 	}
+}
+
+func TestOnboardingAndTokens(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	c.mustDo("POST", "/api/v1/users", `{"handle":"sam","name":"Sam","role":"editor"}`, 201)
+
+	// An admin issues sam's first token; it's returned once, uncached.
+	req := httptest.NewRequest("POST", "/api/v1/users/sam/tokens", strings.NewReader(`{"name":"onboarding"}`))
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	rec := httptest.NewRecorder()
+	c.h.ServeHTTP(rec, req)
+	var created map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &created)
+	secret, _ := created["token"].(string)
+	if rec.Code != 201 || !strings.HasPrefix(secret, auth.TokenPrefix) || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("create token = %d %v, Cache-Control %q", rec.Code, created, rec.Header().Get("Cache-Control"))
+	}
+
+	sam := c.as(secret)
+	me := sam.mustDo("GET", "/api/v1/me", "", 200)
+	if me["handle"] != "sam" || me["role"] != "editor" {
+		t.Fatalf("me = %v", me)
+	}
+	// Sam makes a personal token, then revokes the onboarding one.
+	mine := sam.mustDo("POST", "/api/v1/me/tokens", `{"name":"laptop"}`, 201)
+	sam2 := c.as(mine["token"].(string))
+	toks := sam2.mustDo("GET", "/api/v1/me/tokens", "", 200)["tokens"].([]any)
+	if len(toks) != 2 {
+		t.Fatalf("tokens = %v", toks)
+	}
+	for _, tk := range toks {
+		if _, leaked := tk.(map[string]any)["token"]; leaked {
+			t.Errorf("listed token includes its secret: %v", tk)
+		}
+	}
+	sam2.mustDo("DELETE", "/api/v1/me/tokens/"+strconv.FormatInt(int64(created["id"].(float64)), 10), "", 204)
+	if code, _ := sam.do("GET", "/api/v1/me", ""); code != 401 {
+		t.Errorf("revoked onboarding token: got %d", code)
+	}
+	sam2.mustDo("GET", "/api/v1/me", "", 200)
+
+	// Users can't revoke someone else's token through /me.
+	melToks := c.mustDo("GET", "/api/v1/me/tokens", "", 200)["tokens"].([]any)
+	melID := strconv.FormatInt(int64(melToks[0].(map[string]any)["id"].(float64)), 10)
+	sam2.mustDo("DELETE", "/api/v1/me/tokens/"+melID, "", 404)
+	c.mustDo("GET", "/api/v1/me", "", 200)
+
+	// The audit trail shows who did what to sam's account.
+	events := c.mustDo("GET", "/api/v1/users/sam/audit", "", 200)["events"].([]any)
+	var got []string
+	for _, e := range events {
+		m := e.(map[string]any)
+		got = append(got, m["actor"].(string)+":"+m["action"].(string))
+	}
+	want := "mel:user.created,mel:token.created,sam:token.created,sam:token.revoked"
+	if strings.Join(got, ",") != want {
+		t.Errorf("audit = %v, want %s", got, want)
+	}
+}
+
+func TestAdminsCantLockThemselvesOut(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	c.mustDo("PUT", "/api/v1/users/mel/role", `{"role":"viewer"}`, 403)
+	c.mustDo("DELETE", "/api/v1/users/mel", "", 403)
+	if me := c.mustDo("GET", "/api/v1/me", "", 200); me["role"] != "admin" {
+		t.Fatalf("mel = %v", me)
+	}
+	// Another admin can.
+	ana := c.as(c.newUser("ana", auth.RoleAdmin))
+	ana.mustDo("PUT", "/api/v1/users/mel/role", `{"role":"editor"}`, 200)
+	if me := c.mustDo("GET", "/api/v1/me", "", 200); me["role"] != "editor" {
+		t.Fatalf("mel after demotion = %v", me)
+	}
+	ana.mustDo("DELETE", "/api/v1/users/mel", "", 204)
+	if code, _ := c.do("GET", "/api/v1/me", ""); code != 401 {
+		t.Errorf("disabled user's token: got %d", code)
+	}
+	u := ana.mustDo("GET", "/api/v1/users/mel", "", 200)
+	if u["disabled_at"] == nil {
+		t.Errorf("mel not marked disabled: %v", u)
+	}
+}
+
+func TestSDKKeyEndpoints(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+	c.mustDo("PUT", "/api/v1/flags/new-checkout/environments/staging", `{"enabled":true,"rollout_percentage":100}`, 200)
+
+	k := c.mustDo("POST", "/api/v1/sdk-keys", `{"environment":"staging","name":"checkout-service"}`, 201)
+	secret := k["key"].(string)
+	if !strings.HasPrefix(secret, auth.SDKKeyPrefix) || k["environment"] != "staging" {
+		t.Fatalf("created = %v", k)
+	}
+	app := c.as(secret)
+	if got := app.mustDo("POST", "/api/v1/evaluate", `{"flag":"new-checkout","user_id":"u"}`, 200); got["enabled"] != true {
+		t.Errorf("evaluate = %v", got)
+	}
+	listed := c.mustDo("GET", "/api/v1/sdk-keys", "", 200)["sdk_keys"].([]any)
+	if len(listed) != 1 || listed[0].(map[string]any)["key"] != nil {
+		t.Errorf("listed = %v", listed)
+	}
+	c.mustDo("DELETE", "/api/v1/sdk-keys/"+strconv.FormatInt(int64(k["id"].(float64)), 10), "", 204)
+	if code, _ := app.do("POST", "/api/v1/evaluate", `{"flag":"new-checkout"}`); code != 401 {
+		t.Errorf("revoked key: got %d", code)
+	}
+	c.mustDo("POST", "/api/v1/sdk-keys", `{"environment":"qa","name":"x"}`, 404)
+	c.mustDo("POST", "/api/v1/sdk-keys", `{"environment":"prod","name":""}`, 400)
+	c.mustDo("DELETE", "/api/v1/sdk-keys/999", "", 404)
+	c.mustDo("DELETE", "/api/v1/sdk-keys/abc", "", 404)
+}
+
+func TestEnvironmentEndpoints(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+	editor := c.as(c.newUser("sam", auth.RoleEditor))
+
+	env := c.mustDo("POST", "/api/v1/environments", `{"key":"qa","name":"QA","protected":false}`, 201)
+	if env["key"] != "qa" || env["protected"] != false {
+		t.Fatalf("created = %v", env)
+	}
+	// Existing flags get the new environment, and editors can change it.
+	f := c.mustDo("GET", "/api/v1/flags/new-checkout", "", 200)
+	if _, ok := f["environments"].(map[string]any)["qa"]; !ok {
+		t.Fatalf("flag lacks qa: %v", f)
+	}
+	editor.mustDo("PUT", "/api/v1/flags/new-checkout/environments/qa", `{"enabled":true,"rollout_percentage":100}`, 200)
+
+	// Protecting it locks editors out.
+	c.mustDo("PUT", "/api/v1/environments/qa", `{"name":"QA","protected":true}`, 200)
+	editor.mustDo("PUT", "/api/v1/flags/new-checkout/environments/qa", `{"enabled":false,"rollout_percentage":100}`, 403)
+
+	c.mustDo("POST", "/api/v1/environments", `{"key":"qa","name":"Again"}`, 409)
+	c.mustDo("POST", "/api/v1/environments", `{"key":"Bad Key","name":"x"}`, 400)
+	c.mustDo("PUT", "/api/v1/environments/qa", `{"name":"QA"}`, 400)
+	c.mustDo("PUT", "/api/v1/environments/nope", `{"name":"x","protected":false}`, 404)
+}
+
+func TestAdminBadRequests(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	c.mustDo("POST", "/api/v1/users", `{"handle":"sam","role":"owner"}`, 400)
+	c.mustDo("POST", "/api/v1/users", `{"handle":"Sam","role":"viewer"}`, 400)
+	c.mustDo("POST", "/api/v1/users", `{"handle":"mel","role":"viewer"}`, 409)
+	c.mustDo("GET", "/api/v1/users/nope", "", 404)
+	c.mustDo("PUT", "/api/v1/users/nope/role", `{"role":"viewer"}`, 404)
+	c.mustDo("POST", "/api/v1/users/nope/tokens", `{"name":"x"}`, 404)
+	c.mustDo("GET", "/api/v1/users/nope/audit", "", 404)
+	c.mustDo("POST", "/api/v1/me/tokens", `{"name":"old","expires_at":"2000-01-01T00:00:00Z"}`, 400)
+	c.mustDo("POST", "/api/v1/me/tokens", `{"name":""}`, 400)
+	c.mustDo("POST", "/api/v1/me/tokens", `{"name":"x","expires_at":"next week"}`, 400)
+	c.mustDo("DELETE", "/api/v1/me/tokens/0", "", 404)
 }

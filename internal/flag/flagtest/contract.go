@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Melmonster13/featuresteward/internal/eval"
@@ -226,6 +227,80 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		}
 		if _, err := s.GetEnvironment(ctx, "qa"); !errors.Is(err, flag.ErrNotFound) {
 			t.Errorf("unknown env: got %v", err)
+		}
+	})
+
+	t.Run("create environment backfills every flag", func(t *testing.T) {
+		s := newStore(t)
+		mustCreate(t, s, "new-checkout")
+		mustCreate(t, s, "old")
+		if err := s.ArchiveFlag(ctx, "mel", "old"); err != nil {
+			t.Fatal(err)
+		}
+		qa := flag.Environment{Key: "qa", Name: "QA", Protected: true}
+		got, err := s.CreateEnvironment(ctx, "mel", qa)
+		if err != nil || got != qa {
+			t.Fatalf("CreateEnvironment = %+v, %v", got, err)
+		}
+		f, err := s.GetFlag(ctx, "new-checkout")
+		want := flag.EnvConfig{RolloutPercentage: 100, Rules: []eval.Rule{}}
+		if err != nil || !reflect.DeepEqual(f.Environments["qa"], want) {
+			t.Fatalf("new-checkout qa = %+v, %v", f.Environments["qa"], err)
+		}
+		if f, _ := s.GetFlag(ctx, "old"); len(f.Environments) != 4 {
+			t.Errorf("archived flag has %d environments, want 4", len(f.Environments))
+		}
+		// Flags created afterwards get it too, and it can be changed and evaluated.
+		mustCreate(t, s, "later")
+		if _, err := s.UpdateEnvironment(ctx, "mel", "later", "qa", flag.EnvConfig{Enabled: true, RolloutPercentage: 100}); err != nil {
+			t.Fatalf("update later/qa: %v", err)
+		}
+		if cfg, err := s.EvalConfig(ctx, "later", "qa"); err != nil || !cfg.Enabled {
+			t.Errorf("EvalConfig(later, qa) = %+v, %v", cfg, err)
+		}
+		envs, _ := s.ListEnvironments(ctx)
+		var keys []string
+		for _, e := range envs {
+			keys = append(keys, e.Key)
+		}
+		if !reflect.DeepEqual(keys, []string{"dev", "prod", "qa", "staging"}) {
+			t.Errorf("environments = %v", keys)
+		}
+	})
+
+	t.Run("create environment rejects duplicates and invalid input", func(t *testing.T) {
+		s := newStore(t)
+		if _, err := s.CreateEnvironment(ctx, "mel", flag.Environment{Key: "prod", Name: "Again"}); !errors.Is(err, flag.ErrConflict) {
+			t.Errorf("duplicate: got %v", err)
+		}
+		for _, e := range []flag.Environment{{Key: "", Name: "x"}, {Key: "QA", Name: "x"}, {Key: "q a", Name: "x"},
+			{Key: strings.Repeat("q", 33), Name: "x"}, {Key: "qa", Name: ""}} {
+			if _, err := s.CreateEnvironment(ctx, "mel", e); !errors.Is(err, flag.ErrInvalid) {
+				t.Errorf("%+v: got %v", e, err)
+			}
+		}
+	})
+
+	t.Run("update environment settings", func(t *testing.T) {
+		s := newStore(t)
+		got, err := s.UpdateEnvironmentSettings(ctx, "mel", flag.Environment{Key: "staging", Name: "Stage", Protected: true})
+		if err != nil || got != (flag.Environment{Key: "staging", Name: "Stage", Protected: true}) {
+			t.Fatalf("got %+v, %v", got, err)
+		}
+		if e, _ := s.GetEnvironment(ctx, "staging"); !e.Protected || e.Name != "Stage" {
+			t.Errorf("GetEnvironment = %+v", e)
+		}
+		if _, err := s.UpdateEnvironmentSettings(ctx, "mel", flag.Environment{Key: "qa", Name: "QA"}); !errors.Is(err, flag.ErrNotFound) {
+			t.Errorf("missing: got %v", err)
+		}
+		if _, err := s.UpdateEnvironmentSettings(ctx, "mel", flag.Environment{Key: "staging"}); !errors.Is(err, flag.ErrInvalid) {
+			t.Errorf("blank name: got %v", err)
+		}
+		events, err := s.ListEnvironmentAuditEvents(ctx, "staging")
+		if err != nil || len(events) != 1 || events[0].Action != flag.ActionEnvironmentUpdated || events[0].Actor != "mel" ||
+			!reflect.DeepEqual(decode(t, events[0].Before), map[string]any{"key": "staging", "name": "Staging", "protected": false}) ||
+			!reflect.DeepEqual(decode(t, events[0].After), map[string]any{"key": "staging", "name": "Stage", "protected": true}) {
+			t.Errorf("events = %+v, %v", events, err)
 		}
 	})
 

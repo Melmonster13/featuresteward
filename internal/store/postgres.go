@@ -206,6 +206,45 @@ func (s *Postgres) GetEnvironment(ctx context.Context, key string) (flag.Environ
 	return toEnvironment(row), nil
 }
 
+func (s *Postgres) CreateEnvironment(ctx context.Context, actor string, env flag.Environment) (flag.Environment, error) {
+	if err := env.Validate(); err != nil {
+		return flag.Environment{}, err
+	}
+	var out flag.Environment
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		row, err := q.CreateEnvironment(ctx, db.CreateEnvironmentParams{Key: env.Key, Name: env.Name, Protected: env.Protected})
+		if err != nil {
+			return err
+		}
+		if err := q.BackfillFlagEnvironments(ctx, env.Key); err != nil {
+			return err
+		}
+		out = toEnvironment(row)
+		return envAudit(ctx, q, actor, flag.ActionEnvironmentCreated, env.Key, nil, out)
+	})
+	return out, err
+}
+
+func (s *Postgres) UpdateEnvironmentSettings(ctx context.Context, actor string, env flag.Environment) (flag.Environment, error) {
+	if err := env.Validate(); err != nil {
+		return flag.Environment{}, err
+	}
+	var out flag.Environment
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		before, err := q.GetEnvironmentForUpdate(ctx, env.Key)
+		if err != nil {
+			return mapErr(err)
+		}
+		row, err := q.UpdateEnvironmentSettings(ctx, db.UpdateEnvironmentSettingsParams{Key: env.Key, Name: env.Name, Protected: env.Protected})
+		if err != nil {
+			return err
+		}
+		out = toEnvironment(row)
+		return envAudit(ctx, q, actor, flag.ActionEnvironmentUpdated, env.Key, toEnvironment(before), out)
+	})
+	return out, err
+}
+
 func toEnvironment(r db.Environment) flag.Environment {
 	return flag.Environment{Key: r.Key, Name: r.Name, Protected: r.Protected}
 }

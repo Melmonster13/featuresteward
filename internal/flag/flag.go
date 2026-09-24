@@ -55,6 +55,18 @@ type Meta struct {
 	Description string `json:"description"`
 }
 
+func (e Environment) Validate() error {
+	if len(e.Key) > 32 || !envKeyPattern.MatchString(e.Key) {
+		return errs.Invalid("environment key must be 1-32 lowercase letters, digits, and dashes")
+	}
+	if e.Name == "" {
+		return errs.Invalid("name is required")
+	}
+	return nil
+}
+
+var envKeyPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
+
 func ValidateMeta(key, name string) error {
 	if !ValidKey(key) {
 		return errs.Invalid("key must be lowercase letters, digits, and dashes")
@@ -85,6 +97,9 @@ const (
 	ActionUpdated    = "flag.updated"
 	ActionEnvUpdated = "flag.environment_updated"
 	ActionArchived   = "flag.archived"
+
+	ActionEnvironmentCreated = "environment.created"
+	ActionEnvironmentUpdated = "environment.updated"
 )
 
 // Store persists flags. Every mutation writes its audit event in the
@@ -107,6 +122,13 @@ type Store interface {
 	// ListEnvironments returns environments sorted by key.
 	ListEnvironments(ctx context.Context) ([]Environment, error)
 	GetEnvironment(ctx context.Context, key string) (Environment, error)
+	// CreateEnvironment also gives every existing flag default settings
+	// (disabled, 100%) in the new environment.
+	CreateEnvironment(ctx context.Context, actor string, env Environment) (Environment, error)
+	UpdateEnvironmentSettings(ctx context.Context, actor string, env Environment) (Environment, error)
+	// ListEnvironmentAuditEvents returns environment-level events (not
+	// flag changes), oldest first.
+	ListEnvironmentAuditEvents(ctx context.Context, env string) ([]audit.Event, error)
 	// ListAuditEvents returns a flag's events, oldest first.
 	ListAuditEvents(ctx context.Context, flagKey string) ([]audit.Event, error)
 }

@@ -18,6 +18,41 @@ func (q *Queries) ArchiveFlag(ctx context.Context, id int64) error {
 	return err
 }
 
+const backfillFlagEnvironments = `-- name: BackfillFlagEnvironments :exec
+INSERT INTO flag_environments (flag_id, environment)
+SELECT id, $1 FROM flags
+`
+
+// Gives every existing flag (archived too) default settings in a new environment.
+func (q *Queries) BackfillFlagEnvironments(ctx context.Context, environment string) error {
+	_, err := q.db.Exec(ctx, backfillFlagEnvironments, environment)
+	return err
+}
+
+const createEnvironment = `-- name: CreateEnvironment :one
+INSERT INTO environments (key, name, protected)
+VALUES ($1, $2, $3)
+RETURNING key, name, created_at, protected
+`
+
+type CreateEnvironmentParams struct {
+	Key       string
+	Name      string
+	Protected bool
+}
+
+func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentParams) (Environment, error) {
+	row := q.db.QueryRow(ctx, createEnvironment, arg.Key, arg.Name, arg.Protected)
+	var i Environment
+	err := row.Scan(
+		&i.Key,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Protected,
+	)
+	return i, err
+}
+
 const createFlag = `-- name: CreateFlag :one
 INSERT INTO flags (key, name, description)
 VALUES ($1, $2, $3)
@@ -61,6 +96,22 @@ SELECT key, name, created_at, protected FROM environments WHERE key = $1
 
 func (q *Queries) GetEnvironment(ctx context.Context, key string) (Environment, error) {
 	row := q.db.QueryRow(ctx, getEnvironment, key)
+	var i Environment
+	err := row.Scan(
+		&i.Key,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Protected,
+	)
+	return i, err
+}
+
+const getEnvironmentForUpdate = `-- name: GetEnvironmentForUpdate :one
+SELECT key, name, created_at, protected FROM environments WHERE key = $1 FOR UPDATE
+`
+
+func (q *Queries) GetEnvironmentForUpdate(ctx context.Context, key string) (Environment, error) {
+	row := q.db.QueryRow(ctx, getEnvironmentForUpdate, key)
 	var i Environment
 	err := row.Scan(
 		&i.Key,
@@ -318,6 +369,30 @@ UPDATE flags SET updated_at = now() WHERE id = $1
 func (q *Queries) TouchFlag(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, touchFlag, id)
 	return err
+}
+
+const updateEnvironmentSettings = `-- name: UpdateEnvironmentSettings :one
+UPDATE environments SET name = $2, protected = $3
+WHERE key = $1
+RETURNING key, name, created_at, protected
+`
+
+type UpdateEnvironmentSettingsParams struct {
+	Key       string
+	Name      string
+	Protected bool
+}
+
+func (q *Queries) UpdateEnvironmentSettings(ctx context.Context, arg UpdateEnvironmentSettingsParams) (Environment, error) {
+	row := q.db.QueryRow(ctx, updateEnvironmentSettings, arg.Key, arg.Name, arg.Protected)
+	var i Environment
+	err := row.Scan(
+		&i.Key,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Protected,
+	)
+	return i, err
 }
 
 const updateFlag = `-- name: UpdateFlag :one

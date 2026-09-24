@@ -155,14 +155,7 @@ func (s *server) listAudit(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	out := make([]auditEventJSON, len(events))
-	for i, e := range events {
-		out[i] = auditEventJSON{
-			ID: e.ID, OccurredAt: e.OccurredAt, Actor: e.Actor, Action: e.Action,
-			Environment: e.Environment, Before: e.Before, After: e.After,
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+	writeJSON(w, http.StatusOK, map[string]any{"events": toAuditJSON(events)})
 }
 
 func (s *server) evaluate(w http.ResponseWriter, r *http.Request) {

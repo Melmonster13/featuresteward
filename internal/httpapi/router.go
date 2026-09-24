@@ -47,6 +47,29 @@ func NewRouter(flags flag.Store, users auth.Store, log *slog.Logger) http.Handle
 	// Open to any user or SDK key.
 	api.HandleFunc("POST /api/v1/evaluate", s.evaluate)
 
+	// Every user manages their own tokens.
+	route("GET /api/v1/me", auth.RoleViewer, s.getMe)
+	route("GET /api/v1/me/tokens", auth.RoleViewer, s.listMyTokens)
+	route("POST /api/v1/me/tokens", auth.RoleViewer, s.createMyToken)
+	route("DELETE /api/v1/me/tokens/{id}", auth.RoleViewer, s.revokeMyToken)
+
+	route("GET /api/v1/users", auth.RoleAdmin, s.listUsers)
+	route("POST /api/v1/users", auth.RoleAdmin, s.createUser)
+	route("GET /api/v1/users/{handle}", auth.RoleAdmin, s.getUser)
+	route("PUT /api/v1/users/{handle}/role", auth.RoleAdmin, s.setRole)
+	route("DELETE /api/v1/users/{handle}", auth.RoleAdmin, s.disableUser)
+	route("GET /api/v1/users/{handle}/audit", auth.RoleAdmin, s.listUserAudit)
+	route("GET /api/v1/users/{handle}/tokens", auth.RoleAdmin, s.listUserTokens)
+	route("POST /api/v1/users/{handle}/tokens", auth.RoleAdmin, s.createUserToken)
+	route("DELETE /api/v1/users/{handle}/tokens/{id}", auth.RoleAdmin, s.revokeUserToken)
+
+	route("GET /api/v1/sdk-keys", auth.RoleAdmin, s.listSDKKeys)
+	route("POST /api/v1/sdk-keys", auth.RoleAdmin, s.createSDKKey)
+	route("DELETE /api/v1/sdk-keys/{id}", auth.RoleAdmin, s.revokeSDKKey)
+
+	route("POST /api/v1/environments", auth.RoleAdmin, s.createEnvironment)
+	route("PUT /api/v1/environments/{key}", auth.RoleAdmin, s.updateEnvironmentSettings)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle("/api/", s.authenticate(api))
