@@ -1,6 +1,6 @@
 import { ApiError, type Environment, type Flag } from "./api";
 import type { App } from "./main";
-import { atLeast, envState, flagsHash, matchesSearch, validKey } from "./format";
+import { atLeast, envState, flagHash, flagsHash, matchesSearch, validKey } from "./format";
 import { h } from "./dom";
 
 export async function flagListPage(app: App, params: URLSearchParams): Promise<Node[]> {
@@ -96,7 +96,7 @@ function flagTable(flags: Flag[], envs: Environment[]): HTMLElement {
           h(
             "tr",
             {},
-            h("th", { scope: "row" }, h("code", {}, f.key), h("span", { class: "sub" }, f.name)),
+            h("th", { scope: "row" }, h("a", { href: flagHash(f.key) }, h("code", {}, f.key)), h("span", { class: "sub" }, f.name)),
             ...envs.map((e) => {
               const s = envState(f.environments[e.key]);
               return h("td", {}, h("span", { class: `state ${s.kind}` }, s.label));
@@ -166,7 +166,7 @@ export function newFlagPage(app: App): Node[] {
         try {
           const flag = await app.api.createFlag(values);
           app.flash(`Created ${flag.key}. It's off in every environment.`);
-          app.navigate("#/flags");
+          app.navigate(flagHash(flag.key));
         } catch (err) {
           if (err instanceof ApiError && err.status === 401) return app.fail(err);
           error.textContent = err instanceof ApiError && err.status === 409 ? `A flag called ${values.key} already exists.` : app.message(err);

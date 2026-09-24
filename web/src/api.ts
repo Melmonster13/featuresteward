@@ -39,6 +39,16 @@ export interface Environment {
   protected: boolean;
 }
 
+export interface AuditEvent {
+  id: number;
+  occurred_at: string;
+  actor: string;
+  action: string;
+  environment?: string;
+  before: unknown;
+  after: unknown;
+}
+
 export interface NewFlag {
   key: string;
   name: string;
@@ -87,6 +97,28 @@ export class Api {
     return this.request("POST", "/api/v1/flags", flag);
   }
 
+  // flag returns one flag, including an archived one.
+  flag(key: string): Promise<Flag> {
+    return this.request("GET", flagPath(key));
+  }
+
+  async audit(key: string): Promise<AuditEvent[]> {
+    return (await this.request<{ events: AuditEvent[] }>("GET", `${flagPath(key)}/audit`)).events;
+  }
+
+  // setEnvironment replaces the flag's whole config in one environment.
+  setEnvironment(key: string, env: string, cfg: EnvConfig): Promise<Flag> {
+    return this.request("PUT", `${flagPath(key)}/environments/${encodeURIComponent(env)}`, cfg);
+  }
+
+  setSteward(key: string, steward: string): Promise<Flag> {
+    return this.request("PUT", `${flagPath(key)}/steward`, { steward });
+  }
+
+  archiveFlag(key: string): Promise<void> {
+    return this.request("DELETE", flagPath(key));
+  }
+
   // Every change carries a fresh Idempotency-Key, so a retried request
   // can't be applied twice.
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -103,6 +135,10 @@ export class Api {
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
+}
+
+function flagPath(key: string): string {
+  return `/api/v1/flags/${encodeURIComponent(key)}`;
 }
 
 async function errorMessage(res: Response): Promise<string> {

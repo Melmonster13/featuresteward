@@ -310,3 +310,180 @@ tbody th code {
 h1:focus {
   outline: none;
 }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+h2 {
+  margin: 32px 0 12px;
+  font-size: 1.2rem;
+}
+
+h3 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.crumbs {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.lead {
+  margin: 0 0 8px;
+}
+
+.meta {
+  color: var(--muted);
+}
+
+.meta code {
+  color: var(--text);
+}
+
+.banner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--partial-bg);
+  color: var(--partial-text);
+}
+
+.env-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.env-card {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.env-card form,
+.env-card fieldset {
+  display: grid;
+  gap: 12px;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+input[type="range"] {
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.label {
+  font-weight: 600;
+}
+
+.rules {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.rules li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 6px;
+}
+
+.rules input {
+  min-width: 0;
+}
+
+button.small {
+  padding: 4px 10px;
+  font-size: 0.9rem;
+}
+
+button.danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--surface);
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.status:empty {
+  display: none;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.history li {
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.history time {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.danger-zone {
+  margin-top: 32px;
+  padding: 16px;
+  border: 1px solid var(--error);
+  border-radius: 12px;
+}
+
+.danger-zone h2 {
+  margin-top: 0;
+}
+
+@media (max-width: 520px) {
+  .rules li {
+    grid-template-columns: 1fr 1fr;
+  }
+}

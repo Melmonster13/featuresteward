@@ -1,6 +1,7 @@
 import "./style.css";
 import { Api, ApiError, type User } from "./api";
 import { h } from "./dom";
+import { flagPage } from "./flag";
 import { newFlagPage, flagListPage } from "./flags";
 import { parseRoute } from "./format";
 
@@ -131,7 +132,9 @@ function signedIn(user: User): void {
           ? await flagListPage(app, r.params)
           : r.page === "new-flag"
             ? newFlagPage(app)
-            : [h("h1", { tabindex: "-1" }, "Page not found"), h("p", {}, h("a", { href: "#/flags" }, "Go to flags"))];
+            : r.page === "flag"
+              ? await flagPage(app, r.key)
+              : [h("h1", { tabindex: "-1" }, "Page not found"), h("p", {}, h("a", { href: "#/flags" }, "Go to flags"))];
       if (id !== current) return; // a newer navigation won
       main.replaceChildren(h("p", { class: "flash", role: "status" }, notice), ...nodes);
       // Move focus to the new page's heading, so screen readers announce it.
