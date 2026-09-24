@@ -263,4 +263,4 @@ Built by **Mel** · [MelStackBox](https://melstackbox.com) · [GitHub](https://g
 
 ## License
 
-MIT
+[MIT](LICENSE)
