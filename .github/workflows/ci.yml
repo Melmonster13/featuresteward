@@ -5,14 +5,29 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - run: docker build -t featuresteward .
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: docker run --rm -v "$PWD":/repo zricethezav/gitleaks:latest git /repo --no-banner --redact
