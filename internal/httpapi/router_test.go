@@ -15,7 +15,7 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/flag/flagtest"
 )
 
-const testKey = "test-key-0123456789abcdef0123456789"
+var testKey = strings.Repeat("test", 8)
 
 type client struct {
 	t *testing.T
