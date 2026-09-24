@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEvent, Flag } from "./api";
 import {
-  atLeast, describeEvent, expiryDate, lockReason, tokenStatus, userHash, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
+  atLeast, canReview, describeConfig, describeEvent, expiryDate, isKillSwitch, lockReason, tokenStatus, userHash, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
 } from "./format";
 
 describe("atLeast", () => {
@@ -122,15 +122,63 @@ describe("describeEvent", () => {
 });
 
 describe("lockReason", () => {
-  const dev = { key: "dev", name: "Development", protected: false };
-  const prod = { key: "prod", name: "Production", protected: true };
   it("matches the server's permissions", () => {
-    expect(lockReason("viewer", dev, false)).toBe("Changing flags needs the editor role.");
-    expect(lockReason("editor", dev, false)).toBe("");
-    expect(lockReason("editor", prod, false)).toBe("Changes to Production need an admin until approvals are available.");
-    expect(lockReason("approver", prod, false)).toMatch(/need an admin/);
-    expect(lockReason("admin", prod, false)).toBe("");
-    expect(lockReason("admin", dev, true)).toBe("Archived flags can't be changed.");
+    expect(lockReason("viewer", false)).toBe("Changing flags needs the editor role.");
+    expect(lockReason("editor", false)).toBe("");
+    expect(lockReason("admin", false)).toBe("");
+    expect(lockReason("admin", true)).toBe("Archived flags can't be changed.");
+  });
+});
+
+describe("approvals", () => {
+  const rule = { attribute: "group" as const, values: ["staff"], serve: true };
+  const on = { enabled: true, rollout_percentage: 25, rules: [rule] };
+  it("recognizes the kill switch", () => {
+    expect(isKillSwitch(on, { ...on, enabled: false })).toBe(true);
+    expect(isKillSwitch(on, { ...on, enabled: false, rollout_percentage: 0 })).toBe(false);
+    expect(isKillSwitch(on, { ...on, enabled: false, rules: [] })).toBe(false);
+    expect(isKillSwitch(on, { ...on, rollout_percentage: 50 })).toBe(false);
+    expect(isKillSwitch({ ...on, enabled: false }, { ...on, enabled: false })).toBe(true);
+  });
+
+  const request = {
+    id: 1, flag: "x", environment: "prod", requested_by: "sam", reason: "", base: on, proposed: on,
+    status: "pending" as const, reviewed_by: null, review_comment: "", created_at: "", expires_at: "",
+  };
+  const user = (handle: string, role: "viewer" | "editor" | "approver" | "admin") => ({ handle, name: "", role, created_at: "" });
+  it("knows who can review", () => {
+    expect(canReview(user("ana", "approver"), request, "kim")).toBe(true);
+    expect(canReview(user("mel", "admin"), request, null)).toBe(true);
+    expect(canReview(user("kim", "editor"), request, "kim")).toBe(true);
+    expect(canReview(user("lee", "editor"), request, "kim")).toBe(false);
+    expect(canReview(user("sam", "admin"), request, "sam")).toBe(false); // the requester
+    expect(canReview(user("ana", "approver"), { ...request, status: "approved" }, null)).toBe(false);
+  });
+
+  it("describes configs", () => {
+    expect(describeConfig({ enabled: false, rollout_percentage: 25, rules: [rule] })).toBe("Off");
+    expect(describeConfig(on)).toBe("On at 25%; group in [staff] → on");
+    expect(describeConfig({ enabled: true, rollout_percentage: 100, rules: [{ attribute: "user_id", values: ["u1", "u2"], serve: false }] })).toBe(
+      "On at 100%; user ID in [u1, u2] → off",
+    );
+  });
+
+  it("describes request and emergency events", () => {
+    const env = (k: string) => ({ prod: "Production" })[k] ?? k;
+    const ev = (action: string, after: unknown): AuditEvent => ({ id: 1, occurred_at: "", actor: "ana", action, environment: "prod", before: null, after });
+    const snap = { id: 7, status: "pending", requested_by: "sam", proposed: { enabled: true, rollout_percentage: 25, rules: [] } };
+    expect(describeEvent(ev("change_request.created", snap), env)).toBe("requested 25% in Production (request #7)");
+    expect(describeEvent(ev("change_request.approved", { ...snap, comment: "ok" }), env)).toBe("approved request #7 from @sam (“ok”)");
+    expect(describeEvent(ev("change_request.rejected", snap), env)).toBe("rejected request #7 from @sam");
+    expect(describeEvent(ev("change_request.cancelled", snap), env)).toBe("cancelled request #7");
+    expect(describeEvent(ev("change_request.expired", snap), env)).toBe("request #7 expired without a review");
+    const emergency: AuditEvent = {
+      id: 2, occurred_at: "", actor: "mel", action: "flag.environment_updated", environment: "prod",
+      before: { enabled: false, rollout_percentage: 100, rules: [] },
+      after: { enabled: true, rollout_percentage: 100, rules: [], emergency_reason: "outage" },
+    };
+    expect(describeEvent(emergency, env)).toBe("made an emergency change: changed Production from Off to On (“outage”)");
+    expect(parseRoute("#/reviews").page).toBe("reviews");
   });
 });
 

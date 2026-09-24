@@ -1,4 +1,4 @@
-import type { AuditEvent, EnvConfig, Environment, Flag, Role, Rule } from "./api";
+import type { AuditEvent, ChangeRequest, EnvConfig, Flag, Role, Rule, User } from "./api";
 
 const rank: Record<Role, number> = { viewer: 1, editor: 2, approver: 3, admin: 4 };
 
@@ -10,11 +10,34 @@ export function atLeast(role: Role, min: Role): boolean {
 
 // lockReason says why the user can't change a flag in env, or "" if
 // they can. It mirrors the server, which enforces the same rules.
-export function lockReason(role: Role, env: Environment, archived: boolean): string {
+// Protected environments are open to editors through change requests.
+export function lockReason(role: Role, archived: boolean): string {
   if (archived) return "Archived flags can't be changed.";
   if (!atLeast(role, "editor")) return "Changing flags needs the editor role.";
-  if (env.protected && !atLeast(role, "admin")) return `Changes to ${env.name} need an admin until approvals are available.`;
   return "";
+}
+
+// isKillSwitch reports whether next only turns the flag off, which a
+// protected environment allows without approval.
+export function isKillSwitch(current: EnvConfig, next: EnvConfig): boolean {
+  return !next.enabled && sameConfig(next, { ...current, enabled: false });
+}
+
+// canReview mirrors the server: approvers, admins, and the flag's
+// steward, but never the requester.
+export function canReview(user: User, request: ChangeRequest, steward: string | null): boolean {
+  if (request.status !== "pending" || request.requested_by === user.handle) return false;
+  return atLeast(user.role, "approver") || steward === user.handle;
+}
+
+// describeConfig spells out a config, e.g. "On at 25%; group in [staff] → on".
+export function describeConfig(cfg: EnvConfig): string {
+  if (!cfg.enabled) return "Off";
+  const parts = [`On at ${cfg.rollout_percentage}%`];
+  for (const r of cfg.rules ?? []) {
+    parts.push(`${r.attribute === "user_id" ? "user ID" : "group"} in [${r.values.join(", ")}] → ${r.serve ? "on" : "off"}`);
+  }
+  return parts.join("; ");
 }
 
 // envState summarizes a flag in one environment, like `stew list`.
@@ -45,6 +68,7 @@ export type Route =
   | { page: "user"; handle: string }
   | { page: "sdk-keys" }
   | { page: "environments" }
+  | { page: "reviews" }
   | { page: "not-found" };
 
 export function parseRoute(hash: string): Route {
@@ -64,6 +88,8 @@ export function parseRoute(hash: string): Route {
       return { page: "sdk-keys" };
     case "/admin/environments":
       return { page: "environments" };
+    case "/reviews":
+      return { page: "reviews" };
   }
   if (path.startsWith("/admin/users/")) {
     const handle = safeDecode(path.slice("/admin/users/".length));
@@ -152,8 +178,31 @@ export function describeEvent(e: AuditEvent, envName: (key: string) => string): 
       const name = envName(e.environment ?? "");
       const from = envState(before as unknown as EnvConfig).label;
       const to = envState(after as unknown as EnvConfig).label;
-      if (from !== to) return `changed ${name} from ${from} to ${to}`;
-      return `changed the targeting rules in ${name}`;
+      const what = from !== to ? `changed ${name} from ${from} to ${to}` : `changed the targeting rules in ${name}`;
+      const reason = after.emergency_reason;
+      return typeof reason === "string" ? `made an emergency change: ${what} (“${reason}”)` : what;
+    }
+    case "change_request.created":
+    case "change_request.approved":
+    case "change_request.rejected":
+    case "change_request.cancelled":
+    case "change_request.expired": {
+      const id = after.id;
+      const name = envName(e.environment ?? "");
+      const to = envState(after.proposed as EnvConfig).label;
+      const comment = typeof after.comment === "string" && after.comment ? ` (“${after.comment}”)` : "";
+      switch (e.action) {
+        case "change_request.created":
+          return `requested ${to} in ${name} (request #${id})`;
+        case "change_request.approved":
+          return `approved request #${id} from @${after.requested_by}${comment}`;
+        case "change_request.rejected":
+          return `rejected request #${id} from @${after.requested_by}${comment}`;
+        case "change_request.cancelled":
+          return `cancelled request #${id}`;
+        default:
+          return `request #${id} expired without a review`;
+      }
     }
     case "flag.steward_changed":
       return `changed the steward from ${handle(before.steward)} to ${handle(after.steward)}`;

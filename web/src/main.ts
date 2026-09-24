@@ -4,7 +4,8 @@ import { h } from "./dom";
 import { environmentsPage, sdkKeysPage, tokensPage, userPage, usersPage } from "./admin";
 import { flagPage } from "./flag";
 import { newFlagPage, flagListPage } from "./flags";
-import { atLeast, parseRoute, type Route } from "./format";
+import { atLeast, canReview, parseRoute, type Route } from "./format";
+import { reviewsPage } from "./requests";
 
 // App is what every page gets: the API, who is signed in, and helpers.
 export interface App {
@@ -16,6 +17,8 @@ export interface App {
   // fail handles an unexpected error: an ended session goes back to sign in.
   fail(err: unknown): void;
   message(err: unknown): string;
+  // refreshReviews updates the count of requests waiting for this user.
+  refreshReviews(): void;
 }
 
 const api = new Api();
@@ -100,6 +103,14 @@ function signedIn(user: User): void {
       else main.replaceChildren(h("p", { class: "error", role: "alert" }, messageOf(err)));
     },
     message: messageOf,
+    refreshReviews: () => {
+      countReviews(api, user).then(
+        (n) => {
+          reviewsLink.textContent = n ? `Reviews (${n})` : "Reviews";
+        },
+        () => {}, // the count is a convenience; pages report real errors
+      );
+    },
   };
 
   const signOut = h(
@@ -131,6 +142,7 @@ function signedIn(user: User): void {
       const nodes = await page(app, r);
       if (id !== current) return; // a newer navigation won
       markCurrent(nav, r.page);
+      app.refreshReviews();
       main.replaceChildren(h("p", { class: "flash", role: "status" }, notice), ...nodes);
       // Move focus to the new page's heading, so screen readers announce it.
       main.querySelector<HTMLElement>("h1")?.focus();
@@ -141,6 +153,7 @@ function signedIn(user: User): void {
 
   const links: [string, string, Route["page"][]][] = [
     ["#/flags", "Flags", ["flags", "new-flag", "flag"]],
+    ["#/reviews", "Reviews", ["reviews"]],
     ["#/tokens", "Your tokens", ["tokens"]],
   ];
   if (atLeast(user.role, "admin")) {
@@ -155,6 +168,7 @@ function signedIn(user: User): void {
     { "aria-label": "Main" },
     ...links.map(([href, text, pages]) => h("a", { href, "data-pages": pages.join(" ") }, text)),
   );
+  const reviewsLink = nav.querySelector<HTMLElement>('a[href="#/reviews"]')!;
 
   show(
     h(
@@ -189,9 +203,18 @@ function page(app: App, r: Route): Promise<(Node | string)[]> | (Node | string)[
       return sdkKeysPage(app);
     case "environments":
       return environmentsPage(app);
+    case "reviews":
+      return reviewsPage(app);
     case "not-found":
       return [h("h1", { tabindex: "-1" }, "Page not found"), h("p", {}, h("a", { href: "#/flags" }, "Go to flags"))];
   }
+}
+
+// countReviews counts pending requests this user can review.
+async function countReviews(api: Api, user: User): Promise<number> {
+  const [pending, flags] = await Promise.all([api.requests({ status: "pending" }), api.flags()]);
+  const stewards = new Map(flags.map((f) => [f.key, f.steward]));
+  return pending.filter((r) => canReview(user, r, stewards.get(r.flag) ?? null)).length;
 }
 
 // markCurrent tells screen readers and the styles which nav link is open.

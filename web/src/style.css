@@ -560,6 +560,63 @@ button.danger {
   flex-basis: 100%;
 }
 
+.requests {
+  display: grid;
+  gap: 12px;
+}
+
+.request {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.request.pending {
+  border-color: var(--partial-text);
+}
+
+.env-card .request {
+  margin-bottom: 12px;
+  background: var(--bg);
+}
+
+.request p {
+  margin: 0 0 6px;
+}
+
+.request-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.quote {
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+}
+
+.diff {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 8px 0;
+}
+
+.diff dt {
+  color: var(--muted);
+}
+
+.diff dd {
+  margin: 0;
+}
+
+[hidden] {
+  display: none !important;
+}
+
 .inline-form .error {
   flex-basis: 100%;
 }

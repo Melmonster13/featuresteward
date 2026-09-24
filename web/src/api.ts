@@ -75,6 +75,25 @@ export interface AuditEvent {
   after: unknown;
 }
 
+export type RequestStatus = "pending" | "approved" | "rejected" | "cancelled" | "expired";
+
+// ChangeRequest proposes a config for a flag in a protected environment.
+export interface ChangeRequest {
+  id: number;
+  flag: string;
+  environment: string;
+  requested_by: string;
+  reason: string;
+  base: EnvConfig;
+  proposed: EnvConfig;
+  status: RequestStatus;
+  reviewed_by: string | null;
+  review_comment: string;
+  created_at: string;
+  expires_at: string;
+  resolved_at?: string;
+}
+
 export interface NewFlag {
   key: string;
   name: string;
@@ -132,9 +151,37 @@ export class Api {
     return (await this.request<{ events: AuditEvent[] }>("GET", `${flagPath(key)}/audit`)).events;
   }
 
-  // setEnvironment replaces the flag's whole config in one environment.
-  setEnvironment(key: string, env: string, cfg: EnvConfig): Promise<Flag> {
-    return this.request("PUT", `${flagPath(key)}/environments/${encodeURIComponent(env)}`, cfg);
+  // setEnvironment replaces the flag's whole config in one environment. In
+  // a protected environment, a reason makes it an admin's emergency change.
+  setEnvironment(key: string, env: string, cfg: EnvConfig, reason = ""): Promise<Flag> {
+    const body = reason ? { ...cfg, reason } : cfg;
+    return this.request("PUT", `${flagPath(key)}/environments/${encodeURIComponent(env)}`, body);
+  }
+
+  // --- Change requests ---
+
+  async requests(filter: { status?: RequestStatus; flag?: string } = {}): Promise<ChangeRequest[]> {
+    const params = new URLSearchParams();
+    if (filter.status) params.set("status", filter.status);
+    if (filter.flag) params.set("flag", filter.flag);
+    const query = params.toString() ? `?${params}` : "";
+    return (await this.request<{ requests: ChangeRequest[] }>("GET", `/api/v1/requests${query}`)).requests;
+  }
+
+  requestChange(key: string, env: string, cfg: EnvConfig, reason: string): Promise<ChangeRequest> {
+    return this.request("POST", `${flagPath(key)}/environments/${encodeURIComponent(env)}/requests`, { ...cfg, reason });
+  }
+
+  approve(id: number, comment: string): Promise<ChangeRequest> {
+    return this.request("POST", `/api/v1/requests/${id}/approve`, { comment });
+  }
+
+  reject(id: number, comment: string): Promise<ChangeRequest> {
+    return this.request("POST", `/api/v1/requests/${id}/reject`, { comment });
+  }
+
+  cancel(id: number): Promise<ChangeRequest> {
+    return this.request("POST", `/api/v1/requests/${id}/cancel`);
   }
 
   setSteward(key: string, steward: string): Promise<Flag> {
