@@ -81,6 +81,9 @@ func run(log *slog.Logger) error {
 				if err := db.DeleteExpired(ctx); err != nil {
 					log.Error("delete expired idempotency keys", "err", err)
 				}
+				if err := db.DeleteExpiredSessions(ctx); err != nil {
+					log.Error("delete expired sessions", "err", err)
+				}
 			}
 		}
 	}()

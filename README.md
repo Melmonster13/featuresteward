@@ -147,6 +147,8 @@ Every API request sends `Authorization: Bearer <credential>`. There are two kind
 
 Both are shown once when created. Only a SHA-256 hash is stored.
 
+**Browser sessions:** The dashboard signs in by sending an API token to `POST /api/v1/session`, which sets an `HttpOnly`, `SameSite=Strict` session cookie for 12 hours. The cookie is `Secure` everywhere except `http://localhost`, so the dashboard needs HTTPS in production. A session ends at logout (`DELETE /api/v1/session`), or when its token is revoked or its user is disabled. Requests that use the cookie to change something must come from the dashboard's own origin.
+
 ### Evaluate a flag
 
 ```bash

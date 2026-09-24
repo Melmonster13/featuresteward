@@ -98,9 +98,15 @@ const (
 // Secret prefixes. They differ so the API can tell which kind of
 // credential it was given, and so leaked keys are easy to recognize.
 const (
-	TokenPrefix  = "fs_"
-	SDKKeyPrefix = "fs_sdk_"
+	TokenPrefix   = "fs_"
+	SDKKeyPrefix  = "fs_sdk_"
+	SessionPrefix = "fs_sess_"
 )
+
+// SessionTTL is how long a browser session lasts. A session also ends
+// on logout, or when the token it was made from is revoked or expires,
+// or its user is disabled.
+const SessionTTL = 12 * time.Hour
 
 // NewSecret returns a random secret with the given prefix, its SHA-256
 // hash for storage, and a short display prefix.
@@ -169,4 +175,15 @@ type Store interface {
 	// ListEnvironmentAuditEvents returns environment-level events (not
 	// flag changes), such as SDK key changes, oldest first.
 	ListEnvironmentAuditEvents(ctx context.Context, env string) ([]audit.Event, error)
+
+	// CreateSession starts a browser session from an active API token with
+	// tokenHash, and returns its user, or errs.ErrUnauthorized. Generate
+	// sessionHash with NewSecret(SessionPrefix).
+	CreateSession(ctx context.Context, tokenHash, sessionHash []byte, expiresAt time.Time) (User, error)
+	// AuthenticateSession returns the user of an active session with this
+	// hash, or errs.ErrUnauthorized.
+	AuthenticateSession(ctx context.Context, hash []byte) (User, error)
+	// DeleteSession ends a session. An unknown session is not an error.
+	DeleteSession(ctx context.Context, hash []byte) error
+	DeleteExpiredSessions(ctx context.Context) error
 }

@@ -23,19 +23,26 @@ type token struct {
 	userID int64
 }
 
+type session struct {
+	hash      []byte
+	tokenID   int64
+	expiresAt time.Time
+}
+
 type sdkKey struct {
 	auth.SDKKey
 	hash []byte
 }
 
 type Memory struct {
-	mu      sync.Mutex
-	envs    []string
-	users   map[string]*auth.User
-	tokens  []*token
-	sdkKeys []*sdkKey
-	events  []audit.Event
-	nextID  int64
+	mu       sync.Mutex
+	envs     []string
+	users    map[string]*auth.User
+	tokens   []*token
+	sdkKeys  []*sdkKey
+	sessions []*session
+	events   []audit.Event
+	nextID   int64
 }
 
 var _ auth.Store = (*Memory)(nil)
@@ -174,19 +181,76 @@ func (m *Memory) RevokeToken(_ context.Context, actor, handle string, id int64) 
 func (m *Memory) Authenticate(_ context.Context, hash []byte) (auth.User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	t, u := m.active(func(t *token) bool { return bytes.Equal(t.hash, hash) })
+	if u == nil {
+		return auth.User{}, errs.ErrUnauthorized
+	}
+	now := time.Now()
+	t.LastUsedAt = &now
+	return *u, nil
+}
+
+// active finds an unrevoked, unexpired token matching match, and its
+// enabled user. u is nil if there is none.
+func (m *Memory) active(match func(*token) bool) (t *token, u *auth.User) {
 	now := time.Now()
 	for _, t := range m.tokens {
-		if !bytes.Equal(t.hash, hash) || t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now)) {
+		if !match(t) || t.RevokedAt != nil || (t.ExpiresAt != nil && !t.ExpiresAt.After(now)) {
 			continue
 		}
 		for _, u := range m.users {
 			if u.ID == t.userID && u.DisabledAt == nil {
-				t.LastUsedAt = &now
+				return t, u
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (m *Memory) CreateSession(_ context.Context, tokenHash, sessionHash []byte, expiresAt time.Time) (auth.User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, u := m.active(func(t *token) bool { return bytes.Equal(t.hash, tokenHash) })
+	if u == nil {
+		return auth.User{}, errs.ErrUnauthorized
+	}
+	for _, s := range m.sessions {
+		if bytes.Equal(s.hash, sessionHash) {
+			return auth.User{}, errs.ErrConflict
+		}
+	}
+	now := time.Now()
+	t.LastUsedAt = &now
+	m.sessions = append(m.sessions, &session{hash: bytes.Clone(sessionHash), tokenID: t.ID, expiresAt: expiresAt})
+	return *u, nil
+}
+
+func (m *Memory) AuthenticateSession(_ context.Context, hash []byte) (auth.User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		if bytes.Equal(s.hash, hash) && s.expiresAt.After(time.Now()) {
+			if _, u := m.active(func(t *token) bool { return t.ID == s.tokenID }); u != nil {
 				return *u, nil
 			}
 		}
 	}
 	return auth.User{}, errs.ErrUnauthorized
+}
+
+func (m *Memory) DeleteSession(_ context.Context, hash []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions = slices.DeleteFunc(m.sessions, func(s *session) bool { return bytes.Equal(s.hash, hash) })
+	return nil
+}
+
+func (m *Memory) DeleteExpiredSessions(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.sessions = slices.DeleteFunc(m.sessions, func(s *session) bool { return !s.expiresAt.After(now) })
+	return nil
 }
 
 func (m *Memory) ListUserAuditEvents(_ context.Context, handle string) ([]audit.Event, error) {

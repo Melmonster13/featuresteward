@@ -206,6 +206,99 @@ func RunContract(t *testing.T, newStore func(t *testing.T) auth.Store) {
 		}
 	})
 
+	t.Run("session lifecycle", func(t *testing.T) {
+		s := newStore(t)
+		mustUser(t, s, "sam", auth.RoleEditor)
+		token := mustToken(t, s, "sam", nil)
+		_, hash, _ := auth.NewSecret(auth.SessionPrefix)
+		u, err := s.CreateSession(ctx, auth.HashSecret(token), hash, time.Now().Add(time.Hour))
+		if err != nil || u.Handle != "sam" {
+			t.Fatalf("CreateSession = %+v, %v", u, err)
+		}
+		if u, err := s.AuthenticateSession(ctx, hash); err != nil || u.Handle != "sam" || u.Role != auth.RoleEditor {
+			t.Fatalf("AuthenticateSession = %+v, %v", u, err)
+		}
+		// A session isn't a token, and a token isn't a session.
+		if _, err := s.Authenticate(ctx, hash); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("session hash as token: got %v", err)
+		}
+		if _, err := s.AuthenticateSession(ctx, auth.HashSecret(token)); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("token hash as session: got %v", err)
+		}
+		// Role changes apply to live sessions.
+		s.SetRole(ctx, "system", "sam", auth.RoleViewer)
+		if u, _ := s.AuthenticateSession(ctx, hash); u.Role != auth.RoleViewer {
+			t.Errorf("role after change = %q", u.Role)
+		}
+		if err := s.DeleteExpiredSessions(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AuthenticateSession(ctx, hash); err != nil {
+			t.Errorf("cleanup removed a live session: %v", err)
+		}
+		if err := s.DeleteSession(ctx, hash); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AuthenticateSession(ctx, hash); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("after delete: got %v", err)
+		}
+		if err := s.DeleteSession(ctx, hash); err != nil {
+			t.Errorf("deleting twice: %v", err)
+		}
+	})
+
+	t.Run("sessions need a live token and user", func(t *testing.T) {
+		s := newStore(t)
+		mustUser(t, s, "sam", auth.RoleEditor)
+		mustUser(t, s, "kim", auth.RoleEditor)
+		newSession := func(token string, expires time.Time) []byte {
+			t.Helper()
+			_, hash, _ := auth.NewSecret(auth.SessionPrefix)
+			if _, err := s.CreateSession(ctx, auth.HashSecret(token), hash, expires); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			return hash
+		}
+		hour := time.Now().Add(time.Hour)
+
+		_, hash, _ := auth.NewSecret(auth.SessionPrefix)
+		if _, err := s.CreateSession(ctx, auth.HashSecret("fs_nope"), hash, hour); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("unknown token: got %v", err)
+		}
+
+		expired := newSession(mustToken(t, s, "sam", nil), time.Now().Add(-time.Second))
+		if _, err := s.AuthenticateSession(ctx, expired); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("expired session: got %v", err)
+		}
+
+		// Revoking the token ends its sessions.
+		token := mustToken(t, s, "sam", nil)
+		revoked := newSession(token, hour)
+		toks, _ := s.ListTokens(ctx, "sam")
+		if err := s.RevokeToken(ctx, "sam", "sam", toks[len(toks)-1].ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AuthenticateSession(ctx, revoked); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("revoked token's session: got %v", err)
+		}
+		if _, err := s.CreateSession(ctx, auth.HashSecret(token), hash, hour); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("session from revoked token: got %v", err)
+		}
+
+		// Disabling the user ends their sessions.
+		disabled := newSession(mustToken(t, s, "kim", nil), hour)
+		if err := s.DisableUser(ctx, "sam", "kim"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AuthenticateSession(ctx, disabled); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("disabled user's session: got %v", err)
+		}
+
+		if err := s.DeleteExpiredSessions(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("sdk key lifecycle", func(t *testing.T) {
 		s := newStore(t)
 		secret, hash, prefix := auth.NewSecret(auth.SDKKeyPrefix)

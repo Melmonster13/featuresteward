@@ -26,6 +26,9 @@ type client struct {
 	users *authtest.Memory
 	idem  *idemtest.Memory
 	token string // sent as the bearer credential
+	// session, if set, is sent as the session cookie instead, with the
+	// headers a browser adds for a same-origin request.
+	session string
 }
 
 // newClient returns a client authenticated as admin "mel".
@@ -70,7 +73,10 @@ func (c *client) as(token string) *client {
 func (c *client) do(method, path, body string) (int, map[string]any) {
 	c.t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	if c.token != "" {
+	if c.session != "" {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: c.session})
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+	} else if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	rec := httptest.NewRecorder()
@@ -377,37 +383,42 @@ func TestRolePermissions(t *testing.T) {
 		{"PUT", "/api/v1/environments/staging", `{"name":"Staging","protected":true}`, auth.RoleAdmin, 200},
 	}
 	ctx := context.Background()
-	for _, role := range []auth.Role{auth.RoleViewer, auth.RoleEditor, auth.RoleApprover, auth.RoleAdmin} {
-		for _, rt := range routes {
-			t.Run(string(role)+" "+rt.method+" "+rt.path, func(t *testing.T) {
-				c := newClient(t, flagtest.NewMemory())
-				c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
-				c.newUser("sam", auth.RoleEditor)
-				c.newSDKKey("prod")
-				u := c.as(c.newUser("u", role))
+	for _, via := range []string{"token", "session"} {
+		for _, role := range []auth.Role{auth.RoleViewer, auth.RoleEditor, auth.RoleApprover, auth.RoleAdmin} {
+			for _, rt := range routes {
+				t.Run(via+" "+string(role)+" "+rt.method+" "+rt.path, func(t *testing.T) {
+					c := newClient(t, flagtest.NewMemory())
+					c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+					c.newUser("sam", auth.RoleEditor)
+					c.newSDKKey("prod")
+					u := c.as(c.newUser("u", role))
+					if via == "session" {
+						u = u.login()
+					}
 
-				samToks, _ := c.users.ListTokens(ctx, "sam")
-				myToks, _ := c.users.ListTokens(ctx, "u")
-				keys, _ := c.users.ListSDKKeys(ctx)
-				path := strings.NewReplacer(
-					"{samToken}", strconv.FormatInt(samToks[0].ID, 10),
-					"{myToken}", strconv.FormatInt(myToks[0].ID, 10),
-					"{sdkKey}", strconv.FormatInt(keys[0].ID, 10),
-				).Replace(rt.path)
+					samToks, _ := c.users.ListTokens(ctx, "sam")
+					myToks, _ := c.users.ListTokens(ctx, "u")
+					keys, _ := c.users.ListSDKKeys(ctx)
+					path := strings.NewReplacer(
+						"{samToken}", strconv.FormatInt(samToks[0].ID, 10),
+						"{myToken}", strconv.FormatInt(myToks[0].ID, 10),
+						"{sdkKey}", strconv.FormatInt(keys[0].ID, 10),
+					).Replace(rt.path)
 
-				before := snapshot(t, c)
-				code, out := u.do(rt.method, path, rt.body)
-				want := rt.want
-				if !role.AtLeast(rt.min) {
-					want = 403
-				}
-				if code != want {
-					t.Fatalf("got %d %v, want %d", code, out, want)
-				}
-				if code == 403 && snapshot(t, c) != before {
-					t.Errorf("denied request changed state")
-				}
-			})
+					before := snapshot(t, c)
+					code, out := u.do(rt.method, path, rt.body)
+					want := rt.want
+					if !role.AtLeast(rt.min) {
+						want = 403
+					}
+					if code != want {
+						t.Fatalf("got %d %v, want %d", code, out, want)
+					}
+					if code == 403 && snapshot(t, c) != before {
+						t.Errorf("denied request changed state")
+					}
+				})
+			}
 		}
 	}
 }

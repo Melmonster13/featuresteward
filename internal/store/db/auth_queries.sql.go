@@ -22,6 +22,33 @@ func (q *Queries) AuthenticateSDKKey(ctx context.Context, keyHash []byte) (strin
 	return environment, err
 }
 
+const authenticateSession = `-- name: AuthenticateSession :one
+SELECT u.id, u.handle, u.name, u.role, u.created_at, u.disabled_at
+FROM sessions s
+JOIN api_tokens t ON t.id = s.token_id
+JOIN users u ON u.id = t.user_id
+WHERE s.session_hash = $1
+  AND s.expires_at > now()
+  AND t.revoked_at IS NULL
+  AND (t.expires_at IS NULL OR t.expires_at > now())
+  AND u.disabled_at IS NULL
+`
+
+// A session works only while its token and user are still active.
+func (q *Queries) AuthenticateSession(ctx context.Context, sessionHash []byte) (User, error) {
+	row := q.db.QueryRow(ctx, authenticateSession, sessionHash)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Handle,
+		&i.Name,
+		&i.Role,
+		&i.CreatedAt,
+		&i.DisabledAt,
+	)
+	return i, err
+}
+
 const authenticateToken = `-- name: AuthenticateToken :one
 SELECT u.id, u.handle, u.name, u.role, u.created_at, u.disabled_at, t.id AS token_id
 FROM api_tokens t
@@ -90,6 +117,22 @@ func (q *Queries) CreateSDKKey(ctx context.Context, arg CreateSDKKeyParams) (Sdk
 	return i, err
 }
 
+const createSession = `-- name: CreateSession :exec
+INSERT INTO sessions (token_id, session_hash, expires_at)
+VALUES ($1, $2, $3)
+`
+
+type CreateSessionParams struct {
+	TokenID     int64
+	SessionHash []byte
+	ExpiresAt   pgtype.Timestamptz
+}
+
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
+	_, err := q.db.Exec(ctx, createSession, arg.TokenID, arg.SessionHash, arg.ExpiresAt)
+	return err
+}
+
 const createToken = `-- name: CreateToken :one
 INSERT INTO api_tokens (user_id, name, token_hash, prefix, expires_at)
 VALUES ($1, $2, $3, $4, $5)
@@ -151,6 +194,24 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.DisabledAt,
 	)
 	return i, err
+}
+
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
+DELETE FROM sessions WHERE expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredSessions)
+	return err
+}
+
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM sessions WHERE session_hash = $1
+`
+
+func (q *Queries) DeleteSession(ctx context.Context, sessionHash []byte) error {
+	_, err := q.db.Exec(ctx, deleteSession, sessionHash)
+	return err
 }
 
 const disableUser = `-- name: DisableUser :exec

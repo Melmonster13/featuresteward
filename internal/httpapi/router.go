@@ -27,7 +27,8 @@ type server struct {
 
 // NewRouter returns the API handler. Every /api/v1 route needs
 // "Authorization: Bearer <credential>": a user's API token, or for
-// POST /api/v1/evaluate only, an SDK key.
+// POST /api/v1/evaluate only, an SDK key. Browsers can instead sign in
+// with POST /api/v1/session and use the session cookie it sets.
 //
 // Each route names the minimum role it needs. Roles are cumulative, and
 // every user is at least a viewer. State-changing routes accept an
@@ -86,8 +87,10 @@ func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
+	mux.HandleFunc("POST /api/v1/session", s.createSession)
+	mux.HandleFunc("DELETE /api/v1/session", s.deleteSession)
 	mux.Handle("/api/", s.authenticate(api))
-	return mux
+	return securityHeaders(mux)
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -112,22 +115,36 @@ func principalFrom(r *http.Request) principal {
 // record changes, so the user is always set there.
 func actor(r *http.Request) string { return principalFrom(r).user.Handle }
 
+// authenticate accepts a bearer credential, or else a session cookie.
 func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || secret == "" {
-			unauthorized(w)
-			return
-		}
-		hash := auth.HashSecret(secret)
 		var p principal
 		var err error
-		if strings.HasPrefix(secret, auth.SDKKeyPrefix) {
-			p.sdkEnv, err = s.users.AuthenticateSDKKey(r.Context(), hash)
-		} else {
+		if header := r.Header.Get("Authorization"); header != "" {
+			secret, ok := strings.CutPrefix(header, "Bearer ")
+			if !ok || secret == "" {
+				unauthorized(w)
+				return
+			}
+			hash := auth.HashSecret(secret)
+			if strings.HasPrefix(secret, auth.SDKKeyPrefix) {
+				p.sdkEnv, err = s.users.AuthenticateSDKKey(r.Context(), hash)
+			} else {
+				var u auth.User
+				u, err = s.users.Authenticate(r.Context(), hash)
+				p.user = &u
+			}
+		} else if c, cerr := r.Cookie(sessionCookie); cerr == nil && c.Value != "" {
+			if err := crossOrigin.Check(r); err != nil {
+				writeError(w, http.StatusForbidden, "cross-origin request refused")
+				return
+			}
 			var u auth.User
-			u, err = s.users.Authenticate(r.Context(), hash)
+			u, err = s.users.AuthenticateSession(r.Context(), auth.HashSecret(c.Value))
 			p.user = &u
+		} else {
+			unauthorized(w)
+			return
 		}
 		if errors.Is(err, errs.ErrUnauthorized) {
 			unauthorized(w)

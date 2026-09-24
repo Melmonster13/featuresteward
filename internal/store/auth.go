@@ -317,3 +317,44 @@ func tsPtr(t *time.Time) pgtype.Timestamptz {
 	}
 	return pgtype.Timestamptz{Time: *t, Valid: true}
 }
+
+func (s *Postgres) CreateSession(ctx context.Context, tokenHash, sessionHash []byte, expiresAt time.Time) (auth.User, error) {
+	row, err := s.q.AuthenticateToken(ctx, tokenHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.User{}, errs.ErrUnauthorized
+	}
+	if err != nil {
+		return auth.User{}, err
+	}
+	if err := s.q.TouchToken(ctx, row.TokenID); err != nil {
+		return auth.User{}, err
+	}
+	if err := s.q.CreateSession(ctx, db.CreateSessionParams{
+		TokenID: row.TokenID, SessionHash: sessionHash, ExpiresAt: tsPtr(&expiresAt),
+	}); err != nil {
+		return auth.User{}, mapErr(err)
+	}
+	return toUser(db.User{
+		ID: row.ID, Handle: row.Handle, Name: row.Name, Role: row.Role,
+		CreatedAt: row.CreatedAt, DisabledAt: row.DisabledAt,
+	}), nil
+}
+
+func (s *Postgres) AuthenticateSession(ctx context.Context, hash []byte) (auth.User, error) {
+	row, err := s.q.AuthenticateSession(ctx, hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.User{}, errs.ErrUnauthorized
+	}
+	if err != nil {
+		return auth.User{}, err
+	}
+	return toUser(row), nil
+}
+
+func (s *Postgres) DeleteSession(ctx context.Context, hash []byte) error {
+	return s.q.DeleteSession(ctx, hash)
+}
+
+func (s *Postgres) DeleteExpiredSessions(ctx context.Context) error {
+	return s.q.DeleteExpiredSessions(ctx)
+}

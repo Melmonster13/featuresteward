@@ -80,3 +80,25 @@ VALUES ($1, $2, $3, $4, $5);
 
 -- name: ListUserAuditEvents :many
 SELECT * FROM audit_events WHERE subject_user = $1 ORDER BY id;
+
+-- name: CreateSession :exec
+INSERT INTO sessions (token_id, session_hash, expires_at)
+VALUES ($1, $2, $3);
+
+-- A session works only while its token and user are still active.
+-- name: AuthenticateSession :one
+SELECT u.*
+FROM sessions s
+JOIN api_tokens t ON t.id = s.token_id
+JOIN users u ON u.id = t.user_id
+WHERE s.session_hash = $1
+  AND s.expires_at > now()
+  AND t.revoked_at IS NULL
+  AND (t.expires_at IS NULL OR t.expires_at > now())
+  AND u.disabled_at IS NULL;
+
+-- name: DeleteSession :exec
+DELETE FROM sessions WHERE session_hash = $1;
+
+-- name: DeleteExpiredSessions :exec
+DELETE FROM sessions WHERE expires_at <= now();

@@ -79,6 +79,14 @@ type SdkKey struct {
 	RevokedAt   pgtype.Timestamptz
 }
 
+type Session struct {
+	ID          int64
+	TokenID     int64
+	SessionHash []byte
+	CreatedAt   pgtype.Timestamptz
+	ExpiresAt   pgtype.Timestamptz
+}
+
 type User struct {
 	ID         int64
 	Handle     string
