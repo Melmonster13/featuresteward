@@ -51,11 +51,6 @@ func run(log *slog.Logger) error {
 	if port == "" {
 		port = "8080"
 	}
-	apiKey := os.Getenv("API_KEY")
-	if len(apiKey) < 32 {
-		return errors.New("API_KEY must be set to at least 32 characters")
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -65,9 +60,10 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	db := store.NewPostgres(pool)
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           httpapi.NewRouter(store.NewPostgres(pool), apiKey, log),
+		Handler:           httpapi.NewRouter(db, db, log),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

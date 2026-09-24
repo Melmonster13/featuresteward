@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -22,17 +23,27 @@ type token struct {
 	userID int64
 }
 
+type sdkKey struct {
+	auth.SDKKey
+	hash []byte
+}
+
 type Memory struct {
-	mu     sync.Mutex
-	users  map[string]*auth.User
-	tokens []*token
-	events []audit.Event
-	nextID int64
+	mu      sync.Mutex
+	envs    []string
+	users   map[string]*auth.User
+	tokens  []*token
+	sdkKeys []*sdkKey
+	events  []audit.Event
+	nextID  int64
 }
 
 var _ auth.Store = (*Memory)(nil)
 
-func NewMemory() *Memory { return &Memory{users: map[string]*auth.User{}} }
+// NewMemory returns an empty store with environments dev, staging, and prod.
+func NewMemory() *Memory {
+	return &Memory{envs: []string{"dev", "staging", "prod"}, users: map[string]*auth.User{}}
+}
 
 func (m *Memory) CreateUser(_ context.Context, actor, handle, name string, role auth.Role) (auth.User, error) {
 	if err := auth.ValidateUser(handle, role); err != nil {
@@ -190,6 +201,75 @@ func (m *Memory) ListUserAuditEvents(_ context.Context, handle string) ([]audit.
 	return out, nil
 }
 
+func (m *Memory) CreateSDKKey(_ context.Context, actor, env, name string, hash []byte, prefix string) (auth.SDKKey, error) {
+	if err := auth.ValidateToken(name, nil, time.Now()); err != nil {
+		return auth.SDKKey{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.Contains(m.envs, env) {
+		return auth.SDKKey{}, errs.ErrNotFound
+	}
+	for _, k := range m.sdkKeys {
+		if bytes.Equal(k.hash, hash) {
+			return auth.SDKKey{}, errs.ErrConflict
+		}
+	}
+	k := &sdkKey{SDKKey: auth.SDKKey{ID: m.id(), Environment: env, Name: name, Prefix: prefix, CreatedAt: time.Now()},
+		hash: bytes.Clone(hash)}
+	m.sdkKeys = append(m.sdkKeys, k)
+	m.envAudit(actor, auth.ActionSDKKeyCreated, env, nil, sdkKeyMeta(k.SDKKey))
+	return k.SDKKey, nil
+}
+
+func (m *Memory) ListSDKKeys(context.Context) ([]auth.SDKKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []auth.SDKKey{}
+	for _, k := range m.sdkKeys {
+		out = append(out, k.SDKKey)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Environment < out[j].Environment })
+	return out, nil
+}
+
+func (m *Memory) RevokeSDKKey(_ context.Context, actor string, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range m.sdkKeys {
+		if k.ID == id && k.RevokedAt == nil {
+			now := time.Now()
+			k.RevokedAt = &now
+			m.envAudit(actor, auth.ActionSDKKeyRevoked, k.Environment, sdkKeyMeta(k.SDKKey), nil)
+			return nil
+		}
+	}
+	return errs.ErrNotFound
+}
+
+func (m *Memory) AuthenticateSDKKey(_ context.Context, hash []byte) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range m.sdkKeys {
+		if bytes.Equal(k.hash, hash) && k.RevokedAt == nil {
+			return k.Environment, nil
+		}
+	}
+	return "", errs.ErrUnauthorized
+}
+
+func (m *Memory) ListEnvironmentAuditEvents(_ context.Context, env string) ([]audit.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []audit.Event{}
+	for _, e := range m.events {
+		if e.Environment == env && e.FlagKey == "" {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
 func (m *Memory) id() int64 {
 	m.nextID++
 	return m.nextID
@@ -211,6 +291,17 @@ func (m *Memory) audit(actor, action, handle string, before, after any) {
 		ID: int64(len(m.events) + 1), OccurredAt: time.Now(), Actor: actor, Action: action,
 		SubjectUser: handle, Before: marshalOrNil(before), After: marshalOrNil(after),
 	})
+}
+
+func (m *Memory) envAudit(actor, action, env string, before, after any) {
+	m.events = append(m.events, audit.Event{
+		ID: int64(len(m.events) + 1), OccurredAt: time.Now(), Actor: actor, Action: action,
+		Environment: env, Before: marshalOrNil(before), After: marshalOrNil(after),
+	})
+}
+
+func sdkKeyMeta(k auth.SDKKey) auth.SDKKeyMeta {
+	return auth.SDKKeyMeta{ID: k.ID, Environment: k.Environment, Name: k.Name, Prefix: k.Prefix}
 }
 
 func meta(u auth.User) auth.UserMeta {

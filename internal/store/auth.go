@@ -166,6 +166,86 @@ func (s *Postgres) ListUserAuditEvents(ctx context.Context, handle string) ([]au
 	return toAuditEvents(rows), nil
 }
 
+func (s *Postgres) CreateSDKKey(ctx context.Context, actor, env, name string, hash []byte, prefix string) (auth.SDKKey, error) {
+	if err := auth.ValidateToken(name, nil, time.Now()); err != nil {
+		return auth.SDKKey{}, err
+	}
+	var out auth.SDKKey
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		row, err := q.CreateSDKKey(ctx, db.CreateSDKKeyParams{Environment: env, Name: name, KeyHash: hash, Prefix: prefix})
+		if err != nil {
+			return err
+		}
+		out = toSDKKey(row)
+		return envAudit(ctx, q, actor, auth.ActionSDKKeyCreated, env, nil, sdkKeyMeta(out))
+	})
+	return out, err
+}
+
+func (s *Postgres) ListSDKKeys(ctx context.Context) ([]auth.SDKKey, error) {
+	rows, err := s.q.ListSDKKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]auth.SDKKey, len(rows))
+	for i, r := range rows {
+		out[i] = toSDKKey(r)
+	}
+	return out, nil
+}
+
+func (s *Postgres) RevokeSDKKey(ctx context.Context, actor string, id int64) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		row, err := q.RevokeSDKKey(ctx, id)
+		if err != nil {
+			return mapErr(err)
+		}
+		k := toSDKKey(row)
+		return envAudit(ctx, q, actor, auth.ActionSDKKeyRevoked, k.Environment, sdkKeyMeta(k), nil)
+	})
+}
+
+func (s *Postgres) AuthenticateSDKKey(ctx context.Context, hash []byte) (string, error) {
+	env, err := s.q.AuthenticateSDKKey(ctx, hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", errs.ErrUnauthorized
+	}
+	return env, err
+}
+
+func (s *Postgres) ListEnvironmentAuditEvents(ctx context.Context, env string) ([]audit.Event, error) {
+	rows, err := s.q.ListEnvironmentAuditEvents(ctx, &env)
+	if err != nil {
+		return nil, err
+	}
+	return toAuditEvents(rows), nil
+}
+
+func envAudit(ctx context.Context, q *db.Queries, actor, action, env string, before, after any) error {
+	b, err := marshalOrNil(before)
+	if err != nil {
+		return err
+	}
+	a, err := marshalOrNil(after)
+	if err != nil {
+		return err
+	}
+	return q.InsertEnvironmentAuditEvent(ctx, db.InsertEnvironmentAuditEventParams{
+		Actor: actor, Action: action, Environment: &env, Before: b, After: a,
+	})
+}
+
+func toSDKKey(r db.SdkKey) auth.SDKKey {
+	return auth.SDKKey{
+		ID: r.ID, Environment: r.Environment, Name: r.Name, Prefix: r.Prefix,
+		CreatedAt: r.CreatedAt.Time, RevokedAt: timePtr(r.RevokedAt),
+	}
+}
+
+func sdkKeyMeta(k auth.SDKKey) auth.SDKKeyMeta {
+	return auth.SDKKeyMeta{ID: k.ID, Environment: k.Environment, Name: k.Name, Prefix: k.Prefix}
+}
+
 func lockEnabledUser(ctx context.Context, q *db.Queries, handle string) (db.User, error) {
 	u, err := q.GetUserForUpdate(ctx, handle)
 	if err != nil {

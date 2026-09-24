@@ -289,6 +289,8 @@ func mapErr(err error) error {
 		switch pgErr.Code {
 		case "23505": // unique_violation
 			return flag.ErrConflict
+		case "23503": // foreign_key_violation, e.g. an unknown environment
+			return flag.ErrNotFound
 		case "23514": // check_violation; message is shown to API clients
 			return errors.Join(flag.ErrInvalid, errors.New("value violates a database constraint"))
 		}

@@ -68,16 +68,39 @@ type TokenMeta struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
+// SDKKey lets an application evaluate flags in one environment.
+type SDKKey struct {
+	ID          int64
+	Environment string
+	Name        string
+	Prefix      string
+	CreatedAt   time.Time
+	RevokedAt   *time.Time
+}
+
+type SDKKeyMeta struct {
+	ID          int64  `json:"id"`
+	Environment string `json:"environment"`
+	Name        string `json:"name"`
+	Prefix      string `json:"prefix"`
+}
+
 const (
-	ActionUserCreated  = "user.created"
-	ActionRoleChanged  = "user.role_changed"
-	ActionUserDisabled = "user.disabled"
-	ActionTokenCreated = "token.created"
-	ActionTokenRevoked = "token.revoked"
+	ActionUserCreated   = "user.created"
+	ActionRoleChanged   = "user.role_changed"
+	ActionUserDisabled  = "user.disabled"
+	ActionTokenCreated  = "token.created"
+	ActionTokenRevoked  = "token.revoked"
+	ActionSDKKeyCreated = "sdk_key.created"
+	ActionSDKKeyRevoked = "sdk_key.revoked"
 )
 
-// Secret prefix for user API tokens.
-const TokenPrefix = "fs_"
+// Secret prefixes. They differ so the API can tell which kind of
+// credential it was given, and so leaked keys are easy to recognize.
+const (
+	TokenPrefix  = "fs_"
+	SDKKeyPrefix = "fs_sdk_"
+)
 
 // NewSecret returns a random secret with the given prefix, its SHA-256
 // hash for storage, and a short display prefix.
@@ -134,4 +157,16 @@ type Store interface {
 
 	// ListUserAuditEvents returns events about a user and their tokens, oldest first.
 	ListUserAuditEvents(ctx context.Context, handle string) ([]audit.Event, error)
+
+	// CreateSDKKey stores a key for env. Generate hash and prefix with
+	// NewSecret(SDKKeyPrefix). An unknown env is errs.ErrNotFound.
+	CreateSDKKey(ctx context.Context, actor, env, name string, hash []byte, prefix string) (SDKKey, error)
+	ListSDKKeys(ctx context.Context) ([]SDKKey, error)
+	RevokeSDKKey(ctx context.Context, actor string, id int64) error
+	// AuthenticateSDKKey returns the environment of an active key with
+	// this hash, or errs.ErrUnauthorized.
+	AuthenticateSDKKey(ctx context.Context, hash []byte) (env string, err error)
+	// ListEnvironmentAuditEvents returns environment-level events (not
+	// flag changes), such as SDK key changes, oldest first.
+	ListEnvironmentAuditEvents(ctx context.Context, env string) ([]audit.Event, error)
 }

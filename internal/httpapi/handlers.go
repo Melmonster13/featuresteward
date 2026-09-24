@@ -38,7 +38,7 @@ type auditEventJSON struct {
 }
 
 func (s *server) listEnvironments(w http.ResponseWriter, r *http.Request) {
-	envs, err := s.store.ListEnvironments(r.Context())
+	envs, err := s.flags.ListEnvironments(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -47,7 +47,7 @@ func (s *server) listEnvironments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listFlags(w http.ResponseWriter, r *http.Request) {
-	flags, err := s.store.ListFlags(r.Context())
+	flags, err := s.flags.ListFlags(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -68,7 +68,7 @@ func (s *server) createFlag(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	f, err := s.store.CreateFlag(r.Context(), actor, req.Key, req.Name, req.Description)
+	f, err := s.flags.CreateFlag(r.Context(), actor(r), req.Key, req.Name, req.Description)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -78,7 +78,7 @@ func (s *server) createFlag(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getFlag(w http.ResponseWriter, r *http.Request) {
-	f, err := s.store.GetFlag(r.Context(), r.PathValue("key"))
+	f, err := s.flags.GetFlag(r.Context(), r.PathValue("key"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -94,7 +94,7 @@ func (s *server) updateFlag(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	f, err := s.store.UpdateFlag(r.Context(), actor, r.PathValue("key"), req.Name, req.Description)
+	f, err := s.flags.UpdateFlag(r.Context(), actor(r), r.PathValue("key"), req.Name, req.Description)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -103,7 +103,7 @@ func (s *server) updateFlag(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) archiveFlag(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.ArchiveFlag(r.Context(), actor, r.PathValue("key")); err != nil {
+	if err := s.flags.ArchiveFlag(r.Context(), actor(r), r.PathValue("key")); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -125,7 +125,7 @@ func (s *server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := flag.EnvConfig{Enabled: *req.Enabled, RolloutPercentage: *req.RolloutPercentage, Rules: req.Rules}
-	f, err := s.store.UpdateEnvironment(r.Context(), actor, r.PathValue("key"), r.PathValue("env"), cfg)
+	f, err := s.flags.UpdateEnvironment(r.Context(), actor(r), r.PathValue("key"), r.PathValue("env"), cfg)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -135,11 +135,11 @@ func (s *server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) listAudit(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
-	if _, err := s.store.GetFlag(r.Context(), key); err != nil {
+	if _, err := s.flags.GetFlag(r.Context(), key); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	events, err := s.store.ListAuditEvents(r.Context(), key)
+	events, err := s.flags.ListAuditEvents(r.Context(), key)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -164,11 +164,20 @@ func (s *server) evaluate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	// An SDK key is tied to one environment, which is the default.
+	if env := principalFrom(r).sdkEnv; env != "" {
+		if req.Environment == "" {
+			req.Environment = env
+		} else if req.Environment != env {
+			writeError(w, http.StatusForbidden, "this SDK key is for environment "+env)
+			return
+		}
+	}
 	if req.Flag == "" || req.Environment == "" {
 		writeError(w, http.StatusBadRequest, "flag and environment are required")
 		return
 	}
-	cfg, err := s.store.EvalConfig(r.Context(), req.Flag, req.Environment)
+	cfg, err := s.flags.EvalConfig(r.Context(), req.Flag, req.Environment)
 	if err != nil {
 		s.fail(w, r, err)
 		return

@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const authenticateSDKKey = `-- name: AuthenticateSDKKey :one
+SELECT environment FROM sdk_keys WHERE key_hash = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) AuthenticateSDKKey(ctx context.Context, keyHash []byte) (string, error) {
+	row := q.db.QueryRow(ctx, authenticateSDKKey, keyHash)
+	var environment string
+	err := row.Scan(&environment)
+	return environment, err
+}
+
 const authenticateToken = `-- name: AuthenticateToken :one
 SELECT u.id, u.handle, u.name, u.role, u.created_at, u.disabled_at, t.id AS token_id
 FROM api_tokens t
@@ -42,6 +53,39 @@ func (q *Queries) AuthenticateToken(ctx context.Context, tokenHash []byte) (Auth
 		&i.CreatedAt,
 		&i.DisabledAt,
 		&i.TokenID,
+	)
+	return i, err
+}
+
+const createSDKKey = `-- name: CreateSDKKey :one
+INSERT INTO sdk_keys (environment, name, key_hash, prefix)
+VALUES ($1, $2, $3, $4)
+RETURNING id, environment, name, key_hash, prefix, created_at, revoked_at
+`
+
+type CreateSDKKeyParams struct {
+	Environment string
+	Name        string
+	KeyHash     []byte
+	Prefix      string
+}
+
+func (q *Queries) CreateSDKKey(ctx context.Context, arg CreateSDKKeyParams) (SdkKey, error) {
+	row := q.db.QueryRow(ctx, createSDKKey,
+		arg.Environment,
+		arg.Name,
+		arg.KeyHash,
+		arg.Prefix,
+	)
+	var i SdkKey
+	err := row.Scan(
+		&i.ID,
+		&i.Environment,
+		&i.Name,
+		&i.KeyHash,
+		&i.Prefix,
+		&i.CreatedAt,
+		&i.RevokedAt,
 	)
 	return i, err
 }
@@ -154,6 +198,30 @@ func (q *Queries) GetUserForUpdate(ctx context.Context, handle string) (User, er
 	return i, err
 }
 
+const insertEnvironmentAuditEvent = `-- name: InsertEnvironmentAuditEvent :exec
+INSERT INTO audit_events (actor, action, environment, before, after)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertEnvironmentAuditEventParams struct {
+	Actor       string
+	Action      string
+	Environment *string
+	Before      []byte
+	After       []byte
+}
+
+func (q *Queries) InsertEnvironmentAuditEvent(ctx context.Context, arg InsertEnvironmentAuditEventParams) error {
+	_, err := q.db.Exec(ctx, insertEnvironmentAuditEvent,
+		arg.Actor,
+		arg.Action,
+		arg.Environment,
+		arg.Before,
+		arg.After,
+	)
+	return err
+}
+
 const insertUserAuditEvent = `-- name: InsertUserAuditEvent :exec
 INSERT INTO audit_events (actor, action, subject_user, before, after)
 VALUES ($1, $2, $3, $4, $5)
@@ -176,6 +244,74 @@ func (q *Queries) InsertUserAuditEvent(ctx context.Context, arg InsertUserAuditE
 		arg.After,
 	)
 	return err
+}
+
+const listEnvironmentAuditEvents = `-- name: ListEnvironmentAuditEvents :many
+SELECT id, occurred_at, actor, action, flag_key, environment, before, after, subject_user FROM audit_events
+WHERE environment = $1 AND flag_key IS NULL
+ORDER BY id
+`
+
+func (q *Queries) ListEnvironmentAuditEvents(ctx context.Context, environment *string) ([]AuditEvent, error) {
+	rows, err := q.db.Query(ctx, listEnvironmentAuditEvents, environment)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEvent
+	for rows.Next() {
+		var i AuditEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.OccurredAt,
+			&i.Actor,
+			&i.Action,
+			&i.FlagKey,
+			&i.Environment,
+			&i.Before,
+			&i.After,
+			&i.SubjectUser,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSDKKeys = `-- name: ListSDKKeys :many
+SELECT id, environment, name, key_hash, prefix, created_at, revoked_at FROM sdk_keys ORDER BY environment, id
+`
+
+func (q *Queries) ListSDKKeys(ctx context.Context) ([]SdkKey, error) {
+	rows, err := q.db.Query(ctx, listSDKKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SdkKey
+	for rows.Next() {
+		var i SdkKey
+		if err := rows.Scan(
+			&i.ID,
+			&i.Environment,
+			&i.Name,
+			&i.KeyHash,
+			&i.Prefix,
+			&i.CreatedAt,
+			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listTokens = `-- name: ListTokens :many
@@ -275,6 +411,27 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeSDKKey = `-- name: RevokeSDKKey :one
+UPDATE sdk_keys SET revoked_at = now()
+WHERE id = $1 AND revoked_at IS NULL
+RETURNING id, environment, name, key_hash, prefix, created_at, revoked_at
+`
+
+func (q *Queries) RevokeSDKKey(ctx context.Context, id int64) (SdkKey, error) {
+	row := q.db.QueryRow(ctx, revokeSDKKey, id)
+	var i SdkKey
+	err := row.Scan(
+		&i.ID,
+		&i.Environment,
+		&i.Name,
+		&i.KeyHash,
+		&i.Prefix,
+		&i.CreatedAt,
+		&i.RevokedAt,
+	)
+	return i, err
 }
 
 const revokeToken = `-- name: RevokeToken :one

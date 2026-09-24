@@ -15,7 +15,7 @@ import (
 )
 
 // RunContract checks behavior every auth.Store must share. newStore must
-// return an empty store.
+// return an empty store with environments dev, staging, and prod.
 func RunContract(t *testing.T, newStore func(t *testing.T) auth.Store) {
 	ctx := context.Background()
 
@@ -203,6 +203,83 @@ func RunContract(t *testing.T, newStore func(t *testing.T) auth.Store) {
 		}
 		if _, err := s.CreateUser(ctx, "mel", "sam", "", auth.RoleViewer); !errors.Is(err, errs.ErrConflict) {
 			t.Errorf("reuse disabled handle: got %v", err)
+		}
+	})
+
+	t.Run("sdk key lifecycle", func(t *testing.T) {
+		s := newStore(t)
+		secret, hash, prefix := auth.NewSecret(auth.SDKKeyPrefix)
+		if !strings.HasPrefix(secret, auth.SDKKeyPrefix) || !strings.HasPrefix(prefix, auth.SDKKeyPrefix) {
+			t.Fatalf("secret %q / prefix %q lack %q", secret[:10], prefix, auth.SDKKeyPrefix)
+		}
+		k, err := s.CreateSDKKey(ctx, "mel", "prod", "checkout-service", hash, prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if k.Environment != "prod" || k.Name != "checkout-service" || k.Prefix != prefix || k.RevokedAt != nil {
+			t.Fatalf("key = %+v", k)
+		}
+		env, err := s.AuthenticateSDKKey(ctx, auth.HashSecret(secret))
+		if err != nil || env != "prod" {
+			t.Fatalf("AuthenticateSDKKey = %q, %v", env, err)
+		}
+		if _, err := s.AuthenticateSDKKey(ctx, auth.HashSecret(secret+"x")); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("wrong key: got %v", err)
+		}
+		// A user token must not work as an SDK key, or the reverse.
+		mustUser(t, s, "sam", auth.RoleAdmin)
+		userSecret := mustToken(t, s, "sam", nil)
+		if _, err := s.AuthenticateSDKKey(ctx, auth.HashSecret(userSecret)); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("user token as SDK key: got %v", err)
+		}
+		if _, err := s.Authenticate(ctx, auth.HashSecret(secret)); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("SDK key as user token: got %v", err)
+		}
+
+		keys, err := s.ListSDKKeys(ctx)
+		if err != nil || len(keys) != 1 || keys[0].ID != k.ID {
+			t.Fatalf("ListSDKKeys = %+v, %v", keys, err)
+		}
+		if err := s.RevokeSDKKey(ctx, "mel", k.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AuthenticateSDKKey(ctx, hash); !errors.Is(err, errs.ErrUnauthorized) {
+			t.Errorf("revoked key: got %v", err)
+		}
+		if err := s.RevokeSDKKey(ctx, "mel", k.ID); !errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("revoke twice: got %v", err)
+		}
+
+		events, err := s.ListEnvironmentAuditEvents(ctx, "prod")
+		if err != nil || len(events) != 2 {
+			t.Fatalf("events = %+v, %v", events, err)
+		}
+		m := map[string]any{"id": float64(k.ID), "environment": "prod", "name": "checkout-service", "prefix": prefix}
+		if events[0].Action != auth.ActionSDKKeyCreated || !reflect.DeepEqual(decode(t, events[0].After), m) ||
+			events[1].Action != auth.ActionSDKKeyRevoked || !reflect.DeepEqual(decode(t, events[1].Before), m) {
+			t.Errorf("events = %+v", events)
+		}
+		for _, e := range events {
+			if e.Actor != "mel" || strings.Contains(string(e.Before)+string(e.After), hex.EncodeToString(hash)) {
+				t.Errorf("event %+v", e)
+			}
+		}
+	})
+
+	t.Run("sdk key validation", func(t *testing.T) {
+		s := newStore(t)
+		_, hash, prefix := auth.NewSecret(auth.SDKKeyPrefix)
+		if _, err := s.CreateSDKKey(ctx, "mel", "qa", "svc", hash, prefix); !errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("unknown env: got %v", err)
+		}
+		if _, err := s.CreateSDKKey(ctx, "mel", "prod", "", hash, prefix); !errors.Is(err, errs.ErrInvalid) {
+			t.Errorf("blank name: got %v", err)
+		}
+		if _, err := s.CreateSDKKey(ctx, "mel", "prod", "svc", hash, prefix); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateSDKKey(ctx, "mel", "dev", "svc", hash, prefix); !errors.Is(err, errs.ErrConflict) {
+			t.Errorf("duplicate hash: got %v", err)
 		}
 	})
 

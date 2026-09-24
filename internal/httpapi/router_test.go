@@ -11,26 +11,63 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Melmonster13/featuresteward/internal/auth"
+	"github.com/Melmonster13/featuresteward/internal/auth/authtest"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/flag/flagtest"
 )
 
-var testKey = strings.Repeat("test", 8)
-
 type client struct {
-	t *testing.T
-	h http.Handler
+	t     *testing.T
+	h     http.Handler
+	users *authtest.Memory
+	token string // sent as the bearer credential
 }
 
-func newClient(t *testing.T, store flag.Store) *client {
-	return &client{t, NewRouter(store, testKey, slog.New(slog.NewTextHandler(io.Discard, nil)))}
+// newClient returns a client authenticated as admin "mel".
+func newClient(t *testing.T, flags flag.Store) *client {
+	users := authtest.NewMemory()
+	c := &client{t: t, users: users, h: NewRouter(flags, users, slog.New(slog.NewTextHandler(io.Discard, nil)))}
+	c.token = c.newUser("mel", auth.RoleAdmin)
+	return c
 }
 
-// do sends an authenticated request and decodes a JSON response into a map.
+// newUser creates a user and returns a token for them.
+func (c *client) newUser(handle string, role auth.Role) string {
+	c.t.Helper()
+	if _, err := c.users.CreateUser(context.Background(), "system", handle, "", role); err != nil {
+		c.t.Fatal(err)
+	}
+	secret, hash, prefix := auth.NewSecret(auth.TokenPrefix)
+	if _, err := c.users.CreateToken(context.Background(), "system", handle, "test", hash, prefix, nil); err != nil {
+		c.t.Fatal(err)
+	}
+	return secret
+}
+
+func (c *client) newSDKKey(env string) string {
+	c.t.Helper()
+	secret, hash, prefix := auth.NewSecret(auth.SDKKeyPrefix)
+	if _, err := c.users.CreateSDKKey(context.Background(), "mel", env, "test", hash, prefix); err != nil {
+		c.t.Fatal(err)
+	}
+	return secret
+}
+
+// as returns a client sending a different credential.
+func (c *client) as(token string) *client {
+	cc := *c
+	cc.token = token
+	return &cc
+}
+
+// do sends a request and decodes a JSON response into a map.
 func (c *client) do(method, path, body string) (int, map[string]any) {
 	c.t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+testKey)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	rec := httptest.NewRecorder()
 	c.h.ServeHTTP(rec, req)
 	var out map[string]any
@@ -60,24 +97,92 @@ func TestHealthzNeedsNoAuth(t *testing.T) {
 }
 
 func TestAuth(t *testing.T) {
-	h := newClient(t, flagtest.NewMemory()).h
-	for _, header := range []string{"", "Bearer", "Bearer wrong", "Basic " + testKey, testKey, "Bearer " + testKey + "x"} {
+	c := newClient(t, flagtest.NewMemory())
+	c.mustDo("GET", "/api/v1/flags", "", 200)
+
+	revoked := c.newUser("rev", auth.RoleAdmin)
+	toks, _ := c.users.ListTokens(context.Background(), "rev")
+	c.users.RevokeToken(context.Background(), "mel", "rev", toks[0].ID)
+	disabled := c.newUser("gone", auth.RoleAdmin)
+	c.users.DisableUser(context.Background(), "mel", "gone")
+
+	for name, header := range map[string]string{
+		"none":          "",
+		"empty bearer":  "Bearer ",
+		"wrong token":   "Bearer fs_" + strings.Repeat("0", 64),
+		"wrong SDK key": "Bearer " + auth.SDKKeyPrefix + strings.Repeat("0", 64),
+		"not bearer":    "Basic " + c.token,
+		"no scheme":     c.token,
+		"extra char":    "Bearer " + c.token + "x",
+		"revoked token": "Bearer " + revoked,
+		"disabled user": "Bearer " + disabled,
+	} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/flags", nil)
 		if header != "" {
 			req.Header.Set("Authorization", header)
 		}
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("Authorization %q: got %d, want 401", header, rec.Code)
+		c.h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") != "Bearer" {
+			t.Errorf("%s: got %d, want 401 with WWW-Authenticate", name, rec.Code)
 		}
 	}
 	// Unknown API paths also require auth, so they don't reveal what exists.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/nope", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("unknown path: got %d, want 401", rec.Code)
+	if code, _ := c.as("").do("GET", "/api/v1/nope", ""); code != http.StatusUnauthorized {
+		t.Errorf("unknown path: got %d, want 401", code)
+	}
+}
+
+func TestSDKKeys(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+	c.mustDo("PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":100}`, 200)
+	sdk := c.as(c.newSDKKey("prod"))
+
+	got := sdk.mustDo("POST", "/api/v1/evaluate", `{"flag":"new-checkout","environment":"prod","user_id":"u"}`, 200)
+	if got["enabled"] != true {
+		t.Errorf("evaluate = %v", got)
+	}
+	// The key's environment is the default.
+	got = sdk.mustDo("POST", "/api/v1/evaluate", `{"flag":"new-checkout","user_id":"u"}`, 200)
+	if got["enabled"] != true {
+		t.Errorf("evaluate without environment = %v", got)
+	}
+	if code, out := sdk.do("POST", "/api/v1/evaluate", `{"flag":"new-checkout","environment":"dev"}`); code != 403 ||
+		!strings.Contains(out["error"].(string), "environment prod") {
+		t.Errorf("other environment: got %d %v", code, out)
+	}
+	for _, r := range []struct{ method, path, body string }{
+		{"GET", "/api/v1/flags", ""},
+		{"GET", "/api/v1/flags/new-checkout", ""},
+		{"GET", "/api/v1/environments", ""},
+		{"POST", "/api/v1/flags", `{"key":"x","name":"x"}`},
+		{"PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":false,"rollout_percentage":0}`},
+		{"DELETE", "/api/v1/flags/new-checkout", ""},
+		{"GET", "/api/v1/flags/new-checkout/audit", ""},
+	} {
+		if code, _ := sdk.do(r.method, r.path, r.body); code != 403 {
+			t.Errorf("SDK key %s %s: got %d, want 403", r.method, r.path, code)
+		}
+	}
+
+	// A revoked key stops working.
+	keys, _ := c.users.ListSDKKeys(context.Background())
+	c.users.RevokeSDKKey(context.Background(), "mel", keys[0].ID)
+	if code, _ := sdk.do("POST", "/api/v1/evaluate", `{"flag":"new-checkout"}`); code != 401 {
+		t.Errorf("revoked key: got %d, want 401", code)
+	}
+}
+
+func TestChangesAreAttributedToTheCaller(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	sam := c.as(c.newUser("sam", auth.RoleAdmin))
+	sam.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+	c.mustDo("PUT", "/api/v1/flags/new-checkout/environments/dev", `{"enabled":true,"rollout_percentage":100}`, 200)
+
+	events := c.mustDo("GET", "/api/v1/flags/new-checkout/audit", "", 200)["events"].([]any)
+	if len(events) != 2 || events[0].(map[string]any)["actor"] != "sam" || events[1].(map[string]any)["actor"] != "mel" {
+		t.Fatalf("events = %v", events)
 	}
 }
 
@@ -130,7 +235,7 @@ func TestFlagLifecycle(t *testing.T) {
 	for _, e := range audit["events"].([]any) {
 		ev := e.(map[string]any)
 		actions = append(actions, ev["action"].(string))
-		if ev["actor"] != actor {
+		if ev["actor"] != "mel" {
 			t.Errorf("actor = %v", ev["actor"])
 		}
 	}

@@ -74,17 +74,17 @@ flowchart LR
 git clone https://github.com/Melmonster13/featuresteward.git
 cd featuresteward
 cp .env.example .env
-echo "API_KEY=$(openssl rand -hex 32)" >> .env
 docker compose up --build
 ```
 
 - API: http://localhost:8080
 - Dashboard: http://localhost:3000
 
-Run migrations and seed demo data:
+Run migrations, create the first admin, and seed demo data:
 
 ```bash
 make migrate
+make admin HANDLE=yourname   # prints an API token once; save it
 make seed
 ```
 
@@ -116,11 +116,20 @@ Production changes made with `stew` go through the same approval workflow as the
 
 ## Usage
 
+### Authentication
+
+Every API request sends `Authorization: Bearer <credential>`. There are two kinds:
+
+- **API tokens** (`fs_…`) belong to a user and carry that user's role. Changes made with one are recorded under the user's handle in the audit log.
+- **SDK keys** (`fs_sdk_…`) belong to one environment and can only call `/api/v1/evaluate` in that environment. Give these to your applications.
+
+Both are shown once when created. Only a SHA-256 hash is stored.
+
 ### Evaluate a flag
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/evaluate \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer <sdk-key or token>" \
   -H "Content-Type: application/json" \
   -d '{"flag": "new-checkout", "environment": "prod", "user_id": "user-42"}'
 ```
@@ -159,7 +168,6 @@ Permissions are enforced on the server for every request, never only in the UI. 
 | `DATABASE_URL` | PostgreSQL connection string | — |
 | `REDIS_URL` | Redis connection string | — |
 | `PORT` | API port | `8080` |
-| `API_KEY` | Bearer token for the API (at least 32 characters) | — |
 | `CACHE_TTL_SECONDS` | Evaluation cache lifetime | `30` |
 | `RATE_LIMIT_PER_MIN` | Evaluation requests per client per minute | `600` |
 | `STALE_AFTER_DAYS` | Days a flag can sit unchanged at 0% or 100% before it's flagged stale | `30` |

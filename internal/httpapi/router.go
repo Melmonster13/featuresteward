@@ -2,7 +2,7 @@
 package httpapi
 
 import (
-	"crypto/subtle"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,39 +10,40 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Melmonster13/featuresteward/internal/auth"
+	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 )
-
-// actor is recorded in the audit log until per-user auth exists.
-const actor = "api-key"
 
 const maxBodyBytes = 1 << 20
 
 type server struct {
-	store  flag.Store
-	apiKey []byte
-	log    *slog.Logger
+	flags flag.Store
+	users auth.Store
+	log   *slog.Logger
 }
 
-// NewRouter returns the API handler. Every /api/v1 route requires
-// "Authorization: Bearer <apiKey>".
-func NewRouter(store flag.Store, apiKey string, log *slog.Logger) http.Handler {
-	s := &server{store: store, apiKey: []byte(apiKey), log: log}
+// NewRouter returns the API handler. Every /api/v1 route needs
+// "Authorization: Bearer <credential>": a user's API token, or for
+// POST /api/v1/evaluate only, an SDK key.
+func NewRouter(flags flag.Store, users auth.Store, log *slog.Logger) http.Handler {
+	s := &server{flags: flags, users: users, log: log}
 
 	api := http.NewServeMux()
-	api.HandleFunc("GET /api/v1/environments", s.listEnvironments)
-	api.HandleFunc("GET /api/v1/flags", s.listFlags)
-	api.HandleFunc("POST /api/v1/flags", s.createFlag)
-	api.HandleFunc("GET /api/v1/flags/{key}", s.getFlag)
-	api.HandleFunc("PUT /api/v1/flags/{key}", s.updateFlag)
-	api.HandleFunc("DELETE /api/v1/flags/{key}", s.archiveFlag)
-	api.HandleFunc("PUT /api/v1/flags/{key}/environments/{env}", s.updateEnvironment)
-	api.HandleFunc("GET /api/v1/flags/{key}/audit", s.listAudit)
+	user := func(pattern string, h http.HandlerFunc) { api.Handle(pattern, userOnly(h)) }
+	user("GET /api/v1/environments", s.listEnvironments)
+	user("GET /api/v1/flags", s.listFlags)
+	user("POST /api/v1/flags", s.createFlag)
+	user("GET /api/v1/flags/{key}", s.getFlag)
+	user("PUT /api/v1/flags/{key}", s.updateFlag)
+	user("DELETE /api/v1/flags/{key}", s.archiveFlag)
+	user("PUT /api/v1/flags/{key}/environments/{env}", s.updateEnvironment)
+	user("GET /api/v1/flags/{key}/audit", s.listAudit)
 	api.HandleFunc("POST /api/v1/evaluate", s.evaluate)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle("/api/", s.requireAPIKey(api))
+	mux.Handle("/api/", s.authenticate(api))
 	return mux
 }
 
@@ -51,12 +52,61 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-func (s *server) requireAPIKey(next http.Handler) http.Handler {
+// principal is who is calling: a user, or an app holding an SDK key.
+type principal struct {
+	user   *auth.User
+	sdkEnv string
+}
+
+type principalKey struct{}
+
+func principalFrom(r *http.Request) principal {
+	p, _ := r.Context().Value(principalKey{}).(principal)
+	return p
+}
+
+// actor is the audit log's name for the caller. Only user-only routes
+// record changes, so the user is always set there.
+func actor(r *http.Request) string { return principalFrom(r).user.Handle }
+
+func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(token), s.apiKey) != 1 {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeError(w, http.StatusUnauthorized, "missing or invalid API key")
+		secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || secret == "" {
+			unauthorized(w)
+			return
+		}
+		hash := auth.HashSecret(secret)
+		var p principal
+		var err error
+		if strings.HasPrefix(secret, auth.SDKKeyPrefix) {
+			p.sdkEnv, err = s.users.AuthenticateSDKKey(r.Context(), hash)
+		} else {
+			var u auth.User
+			u, err = s.users.Authenticate(r.Context(), hash)
+			p.user = &u
+		}
+		if errors.Is(err, errs.ErrUnauthorized) {
+			unauthorized(w)
+			return
+		}
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+	})
+}
+
+func unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	writeError(w, http.StatusUnauthorized, "missing or invalid credentials")
+}
+
+func userOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if principalFrom(r).user == nil {
+			writeError(w, http.StatusForbidden, "SDK keys can only call POST /api/v1/evaluate")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -77,11 +127,11 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // hidden from the client.
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, flag.ErrNotFound):
+	case errors.Is(err, errs.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
-	case errors.Is(err, flag.ErrConflict):
-		writeError(w, http.StatusConflict, "a flag with this key already exists")
-	case errors.Is(err, flag.ErrInvalid):
+	case errors.Is(err, errs.ErrConflict):
+		writeError(w, http.StatusConflict, "already exists")
+	case errors.Is(err, errs.ErrInvalid):
 		writeError(w, http.StatusBadRequest, validationMessage(err))
 	default:
 		s.log.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "err", err)
@@ -94,7 +144,7 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 func validationMessage(err error) string {
 	if j, ok := err.(interface{ Unwrap() []error }); ok {
 		for _, e := range j.Unwrap() {
-			if e != flag.ErrInvalid {
+			if e != errs.ErrInvalid {
 				return e.Error()
 			}
 		}
