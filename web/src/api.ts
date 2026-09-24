@@ -10,6 +10,42 @@ export interface User {
   created_at: string;
 }
 
+export interface Rule {
+  attribute: "user_id" | "group";
+  values: string[];
+  serve: boolean;
+}
+
+export interface EnvConfig {
+  enabled: boolean;
+  rollout_percentage: number;
+  rules: Rule[];
+}
+
+export interface Flag {
+  key: string;
+  name: string;
+  description: string;
+  steward: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at?: string;
+  environments: Record<string, EnvConfig>;
+}
+
+export interface Environment {
+  key: string;
+  name: string;
+  protected: boolean;
+}
+
+export interface NewFlag {
+  key: string;
+  name: string;
+  description: string;
+  steward: string;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -34,6 +70,21 @@ export class Api {
 
   logout(): Promise<void> {
     return this.request("DELETE", "/api/v1/session");
+  }
+
+  async environments(): Promise<Environment[]> {
+    return (await this.request<{ environments: Environment[] }>("GET", "/api/v1/environments")).environments;
+  }
+
+  // flags lists active flags; steward filters by handle, or "none" for
+  // flags with no active steward.
+  async flags(steward = ""): Promise<Flag[]> {
+    const query = steward ? `?steward=${encodeURIComponent(steward)}` : "";
+    return (await this.request<{ flags: Flag[] }>("GET", `/api/v1/flags${query}`)).flags;
+  }
+
+  createFlag(flag: NewFlag): Promise<Flag> {
+    return this.request("POST", "/api/v1/flags", flag);
   }
 
   // Every change carries a fresh Idempotency-Key, so a retried request
