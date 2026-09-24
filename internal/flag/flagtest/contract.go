@@ -110,7 +110,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		cfg := flag.EnvConfig{Enabled: true, RolloutPercentage: 25, Rules: []eval.Rule{
 			{Attribute: eval.AttributeGroup, Values: []string{"beta"}, Serve: true},
 		}}
-		f, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "prod", cfg)
+		f, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "prod", cfg, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +132,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 	t.Run("update environment with nil rules stores empty rules", func(t *testing.T) {
 		s := newStore(t)
 		mustCreate(t, s, "new-checkout")
-		f, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "dev", flag.EnvConfig{Enabled: true, RolloutPercentage: 50})
+		f, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "dev", flag.EnvConfig{Enabled: true, RolloutPercentage: 50}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,14 +151,14 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 			{RolloutPercentage: 10, Rules: []eval.Rule{{Attribute: eval.AttributeUserID}}},
 		}
 		for _, cfg := range bad {
-			if _, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "dev", cfg); !errors.Is(err, flag.ErrInvalid) {
+			if _, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "dev", cfg, ""); !errors.Is(err, flag.ErrInvalid) {
 				t.Errorf("%+v: got %v, want ErrInvalid", cfg, err)
 			}
 		}
-		if _, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "qa", flag.EnvConfig{}); !errors.Is(err, flag.ErrNotFound) {
+		if _, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "qa", flag.EnvConfig{}, ""); !errors.Is(err, flag.ErrNotFound) {
 			t.Errorf("unknown env: got %v, want ErrNotFound", err)
 		}
-		if _, err := s.UpdateEnvironment(ctx, "sam", "nope", "dev", flag.EnvConfig{}); !errors.Is(err, flag.ErrNotFound) {
+		if _, err := s.UpdateEnvironment(ctx, "sam", "nope", "dev", flag.EnvConfig{}, ""); !errors.Is(err, flag.ErrNotFound) {
 			t.Errorf("missing flag: got %v, want ErrNotFound", err)
 		}
 	})
@@ -179,7 +179,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		if _, err := s.UpdateFlag(ctx, "mel", "old", "X", ""); !errors.Is(err, flag.ErrNotFound) {
 			t.Errorf("update archived: got %v", err)
 		}
-		if _, err := s.UpdateEnvironment(ctx, "mel", "old", "dev", flag.EnvConfig{}); !errors.Is(err, flag.ErrNotFound) {
+		if _, err := s.UpdateEnvironment(ctx, "mel", "old", "dev", flag.EnvConfig{}, ""); !errors.Is(err, flag.ErrNotFound) {
 			t.Errorf("update env of archived: got %v", err)
 		}
 		if _, err := s.EvalConfig(ctx, "old", "dev"); !errors.Is(err, flag.ErrNotFound) {
@@ -195,7 +195,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		mustCreate(t, s, "new-checkout")
 		rules := []eval.Rule{{Attribute: eval.AttributeUserID, Values: []string{"user-1"}, Serve: true}}
 		if _, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "prod",
-			flag.EnvConfig{Enabled: true, RolloutPercentage: 25, Rules: rules}); err != nil {
+			flag.EnvConfig{Enabled: true, RolloutPercentage: 25, Rules: rules}, ""); err != nil {
 			t.Fatal(err)
 		}
 		got, err := s.EvalConfig(ctx, "new-checkout", "prod")
@@ -310,7 +310,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		}
 		// Flags created afterwards get it too, and it can be changed and evaluated.
 		mustCreate(t, s, "later")
-		if _, err := s.UpdateEnvironment(ctx, "mel", "later", "qa", flag.EnvConfig{Enabled: true, RolloutPercentage: 100}); err != nil {
+		if _, err := s.UpdateEnvironment(ctx, "mel", "later", "qa", flag.EnvConfig{Enabled: true, RolloutPercentage: 100}, ""); err != nil {
 			t.Fatalf("update later/qa: %v", err)
 		}
 		if cfg, err := s.EvalConfig(ctx, "later", "qa"); err != nil || !cfg.Enabled {
@@ -369,14 +369,14 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		if _, err := s.UpdateFlag(ctx, "sam", "new-checkout", "Renamed", ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.UpdateEnvironment(ctx, "ana", "new-checkout", "prod", flag.EnvConfig{Enabled: true, RolloutPercentage: 25}); err != nil {
+		if _, err := s.UpdateEnvironment(ctx, "ana", "new-checkout", "prod", flag.EnvConfig{Enabled: true, RolloutPercentage: 25}, ""); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.ArchiveFlag(ctx, "mel", "new-checkout"); err != nil {
 			t.Fatal(err)
 		}
 		// Failed mutations must not be audited.
-		s.UpdateEnvironment(ctx, "ana", "other", "prod", flag.EnvConfig{RolloutPercentage: 500})
+		s.UpdateEnvironment(ctx, "ana", "other", "prod", flag.EnvConfig{RolloutPercentage: 500}, "")
 
 		events, err := s.ListAuditEvents(ctx, "new-checkout")
 		if err != nil {
@@ -421,7 +421,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		s := newStore(t)
 		mustCreate(t, s, "new-checkout")
 		rules := []eval.Rule{{Attribute: eval.AttributeGroup, Values: []string{"beta"}, Serve: true}}
-		f, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "dev", flag.EnvConfig{Enabled: true, Rules: rules})
+		f, err := s.UpdateEnvironment(ctx, "sam", "new-checkout", "dev", flag.EnvConfig{Enabled: true, Rules: rules}, "")
 		if err != nil {
 			t.Fatal(err)
 		}

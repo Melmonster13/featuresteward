@@ -115,7 +115,7 @@ func (s *Postgres) ApproveChangeRequest(ctx context.Context, actor string, id in
 		if !current.Equal(r.Base) {
 			return errs.Conflict(r.Environment + " has changed since this request was made; ask for a new request")
 		}
-		if err := writeEnv(ctx, q, actor, f, r.Environment, r.Base, r.Proposed); err != nil {
+		if err := writeEnv(ctx, q, actor, f, r.Environment, r.Base, r.Proposed, ""); err != nil {
 			return err
 		}
 		out, err = resolve(ctx, q, r, actor, flag.RequestApproved, comment, flag.ActionRequestApproved)

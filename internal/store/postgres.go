@@ -120,7 +120,7 @@ func (s *Postgres) UpdateFlag(ctx context.Context, actor, key, name, description
 	return out, err
 }
 
-func (s *Postgres) UpdateEnvironment(ctx context.Context, actor, key, env string, cfg flag.EnvConfig) (flag.Flag, error) {
+func (s *Postgres) UpdateEnvironment(ctx context.Context, actor, key, env string, cfg flag.EnvConfig, reason string) (flag.Flag, error) {
 	if err := cfg.Validate(); err != nil {
 		return flag.Flag{}, err
 	}
@@ -138,7 +138,7 @@ func (s *Postgres) UpdateEnvironment(ctx context.Context, actor, key, env string
 		if err != nil {
 			return err
 		}
-		if err := writeEnv(ctx, q, actor, f, env, before, cfg); err != nil {
+		if err := writeEnv(ctx, q, actor, f, env, before, cfg, reason); err != nil {
 			return err
 		}
 		row, err := q.GetFlag(ctx, key)
@@ -289,8 +289,9 @@ func lockActive(ctx context.Context, q *db.Queries, key string) (db.Flag, error)
 	return f, nil
 }
 
-// writeEnv stores cfg for a locked flag in env and audits the change from before.
-func writeEnv(ctx context.Context, q *db.Queries, actor string, f db.Flag, env string, before, cfg flag.EnvConfig) error {
+// writeEnv stores cfg for a locked flag in env and audits the change from
+// before. A non-empty reason marks an emergency change.
+func writeEnv(ctx context.Context, q *db.Queries, actor string, f db.Flag, env string, before, cfg flag.EnvConfig, reason string) error {
 	if cfg.Rules == nil {
 		cfg.Rules = []eval.Rule{}
 	}
@@ -310,7 +311,7 @@ func writeEnv(ctx context.Context, q *db.Queries, actor string, f db.Flag, env s
 	if err := q.TouchFlag(ctx, f.ID); err != nil {
 		return err
 	}
-	return flagAudit(ctx, q, actor, flag.ActionEnvUpdated, f.Key, env, before, cfg)
+	return flagAudit(ctx, q, actor, flag.ActionEnvUpdated, f.Key, env, before, flag.NewEnvChange(cfg, reason))
 }
 
 func flagAudit(ctx context.Context, q *db.Queries, actor, action, key, env string, before, after any) error {

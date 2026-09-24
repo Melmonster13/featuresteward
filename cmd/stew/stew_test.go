@@ -217,7 +217,7 @@ func TestList(t *testing.T) {
 	}
 	h.api(tok, "POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`)
 	h.api(tok, "PUT", "/api/v1/flags/new-checkout/environments/prod",
-		`{"enabled":true,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}]}`)
+		`{"enabled":true,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}],"reason":"test"}`)
 	h.api(tok, "PUT", "/api/v1/flags/new-checkout/environments/dev", `{"enabled":true,"rollout_percentage":100}`)
 	h.api(tok, "POST", "/api/v1/flags", `{"key":"dark-mode","name":"Dark mode","steward":"sam"}`)
 
@@ -258,12 +258,12 @@ func TestFlagCommands(t *testing.T) {
 	}
 
 	// toggle and rollout each change one field and keep the rest.
-	h.api(tok, "PUT", "/api/v1/flags/new-checkout/environments/prod",
+	h.api(tok, "PUT", "/api/v1/flags/new-checkout/environments/staging",
 		`{"enabled":false,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}]}`)
-	if out := h.mustStew("", "toggle", "new-checkout", "prod", "on"); out != "new-checkout in prod: 25% +1 rule\n" {
+	if out := h.mustStew("", "toggle", "new-checkout", "staging", "on"); out != "new-checkout in staging: 25% +1 rule\n" {
 		t.Errorf("toggle = %q", out)
 	}
-	if out := h.mustStew("", "rollout", "new-checkout", "prod", "50%"); out != "new-checkout in prod: 50% +1 rule\n" {
+	if out := h.mustStew("", "rollout", "new-checkout", "staging", "50%"); out != "new-checkout in staging: 50% +1 rule\n" {
 		t.Errorf("rollout = %q", out)
 	}
 	h.mustStew("", "rollout", "new-checkout", "dev", "0")
@@ -276,8 +276,8 @@ func TestFlagCommands(t *testing.T) {
 	for _, want := range []string{
 		"new-checkout  New checkout\n  Faster checkout\nSteward: @sam\n",
 		"dev               on 0%   -\n",
-		"prod (protected)  on 50%  group in [staff] → on\n",
-		"staging           off     -\n",
+		"prod (protected)  off     -\n",
+		"staging           on 50%  group in [staff] → on\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status missing %q:\n%s", want, out)
@@ -304,7 +304,7 @@ func TestFlagCommandPermissions(t *testing.T) {
 	h.env["STEW_TOKEN"] = h.token("sam", auth.RoleEditor)
 
 	h.mustStew("", "toggle", "dark-mode", "dev", "on")
-	if code, _, errOut := h.stew("", "toggle", "dark-mode", "prod", "on"); code != 3 || !strings.Contains(errOut, "protected environment prod") {
+	if code, _, errOut := h.stew("", "toggle", "dark-mode", "prod", "on"); code != 3 || !strings.Contains(errOut, "change request") {
 		t.Errorf("editor toggling prod = %d %q", code, errOut)
 	}
 	if code, _, errOut := h.stew("", "steward", "dark-mode", "sam"); code != 3 || !strings.Contains(errOut, "current steward") {

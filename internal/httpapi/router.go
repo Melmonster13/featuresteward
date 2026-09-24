@@ -55,10 +55,19 @@ func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *
 	route("PUT /api/v1/flags/{key}", auth.RoleEditor, s.updateFlag)
 	// Admins, or the flag's current steward (any role); see setSteward.
 	route("PUT /api/v1/flags/{key}/steward", auth.RoleViewer, s.setSteward)
-	// Protected environments additionally need an admin; see updateEnvironment.
+	// Protected environments take change requests instead, except the kill
+	// switch and admins' emergency changes; see updateEnvironment.
 	route("PUT /api/v1/flags/{key}/environments/{env}", auth.RoleEditor, s.updateEnvironment)
+	route("POST /api/v1/flags/{key}/environments/{env}/requests", auth.RoleEditor, s.createRequest)
 	// Archiving turns a flag off everywhere, including protected environments.
 	route("DELETE /api/v1/flags/{key}", auth.RoleAdmin, s.archiveFlag)
+	route("GET /api/v1/requests", auth.RoleViewer, s.listRequests)
+	route("GET /api/v1/requests/{id}", auth.RoleViewer, s.getRequest)
+	// Also the flag's steward, who is at least an editor; see review.
+	route("POST /api/v1/requests/{id}/approve", auth.RoleEditor, s.approveRequest)
+	route("POST /api/v1/requests/{id}/reject", auth.RoleEditor, s.rejectRequest)
+	// Only the requester; see flag.Store.CancelChangeRequest.
+	route("POST /api/v1/requests/{id}/cancel", auth.RoleViewer, s.cancelRequest)
 	// Open to any user or SDK key.
 	api.HandleFunc("POST /api/v1/evaluate", s.evaluate)
 
@@ -197,26 +206,28 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, errs.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, errs.ErrConflict):
-		writeError(w, http.StatusConflict, "already exists")
+		writeError(w, http.StatusConflict, message(err, "already exists"))
+	case errors.Is(err, errs.ErrForbidden):
+		writeError(w, http.StatusForbidden, message(err, "forbidden"))
 	case errors.Is(err, errs.ErrInvalid):
-		writeError(w, http.StatusBadRequest, validationMessage(err))
+		writeError(w, http.StatusBadRequest, message(err, "invalid request"))
 	default:
 		s.log.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 	}
 }
 
-// validationMessage drops the ErrInvalid sentinel from a joined error,
-// leaving the human-readable reason.
-func validationMessage(err error) string {
+// message returns the human-readable reason joined to a sentinel error
+// (see errs.Invalid), or fallback if there is none.
+func message(err error, fallback string) string {
 	if j, ok := err.(interface{ Unwrap() []error }); ok {
 		for _, e := range j.Unwrap() {
-			if e != errs.ErrInvalid {
+			if e != errs.ErrInvalid && e != errs.ErrConflict && e != errs.ErrForbidden {
 				return e.Error()
 			}
 		}
 	}
-	return "invalid request"
+	return fallback
 }
 
 // decode reads a single JSON object, rejecting unknown fields and

@@ -137,6 +137,7 @@ func TestSessionRefusesCrossSiteRequests(t *testing.T) {
 	c := newClient(t, flagtest.NewMemory())
 	c.newUser("sam", auth.RoleEditor)
 	c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+	c.mustDo("POST", "/api/v1/flags", `{"key":"other","name":"Other"}`, 201)
 	s := c.login()
 
 	// A page on another site can't log someone in...

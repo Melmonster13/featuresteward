@@ -130,7 +130,9 @@ type Store interface {
 	GetFlag(ctx context.Context, key string) (Flag, error)
 	ListFlags(ctx context.Context) ([]Flag, error)
 	UpdateFlag(ctx context.Context, actor, key, name, description string) (Flag, error)
-	UpdateEnvironment(ctx context.Context, actor, key, env string, cfg EnvConfig) (Flag, error)
+	// UpdateEnvironment sets a flag's config in env. A non-empty reason
+	// marks an emergency change, recorded in the audit event.
+	UpdateEnvironment(ctx context.Context, actor, key, env string, cfg EnvConfig, reason string) (Flag, error)
 	// SetSteward assigns a non-empty steward; callers validate the handle.
 	SetSteward(ctx context.Context, actor, key, steward string) (Flag, error)
 	ArchiveFlag(ctx context.Context, actor, key string) error

@@ -183,7 +183,7 @@ func runRequestContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		mustCreate(t, s, "new-checkout")
 		r := request(t, s, "sam", proposed, week())
 		killed := flag.EnvConfig{Enabled: false, RolloutPercentage: 0}
-		if _, err := s.UpdateEnvironment(ctx, "mel", "new-checkout", "prod", killed); err != nil {
+		if _, err := s.UpdateEnvironment(ctx, "mel", "new-checkout", "prod", killed, ""); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.ApproveChangeRequest(ctx, "kim", r.ID, ""); !errors.Is(err, errs.ErrConflict) {
@@ -274,6 +274,25 @@ func runRequestContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		}
 		if got := ids(flag.RequestFilter{FlagKey: "nope"}); len(got) != 0 {
 			t.Errorf("unknown flag = %v", got)
+		}
+	})
+
+	t.Run("emergency changes record their reason", func(t *testing.T) {
+		s := newStore(t)
+		mustCreate(t, s, "new-checkout")
+		if _, err := s.UpdateEnvironment(ctx, "mel", "new-checkout", "prod", proposed, "checkout is down"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.UpdateEnvironment(ctx, "mel", "new-checkout", "dev", proposed, ""); err != nil {
+			t.Fatal(err)
+		}
+		events, _ := s.ListAuditEvents(ctx, "new-checkout")
+		emergency := decode(t, events[1].After).(map[string]any)
+		if emergency["emergency_reason"] != "checkout is down" || emergency["rollout_percentage"] != float64(25) || emergency["enabled"] != true {
+			t.Errorf("emergency event after = %v", emergency)
+		}
+		if normal := decode(t, events[2].After).(map[string]any); normal["emergency_reason"] != nil {
+			t.Errorf("normal change has a reason: %v", normal)
 		}
 	})
 

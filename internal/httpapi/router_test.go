@@ -147,7 +147,7 @@ func TestAuth(t *testing.T) {
 func TestSDKKeys(t *testing.T) {
 	c := newClient(t, flagtest.NewMemory())
 	c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
-	c.mustDo("PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":100}`, 200)
+	c.mustDo("PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":100,"reason":"test"}`, 200)
 	sdk := c.as(c.newSDKKey("prod"))
 
 	got := sdk.mustDo("POST", "/api/v1/evaluate", `{"flag":"new-checkout","environment":"prod","user_id":"u"}`, 200)
@@ -218,7 +218,7 @@ func TestFlagLifecycle(t *testing.T) {
 	}
 
 	f = c.mustDo("PUT", "/api/v1/flags/new-checkout/environments/prod",
-		`{"enabled":true,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}]}`, 200)
+		`{"enabled":true,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}],"reason":"test"}`, 200)
 	prod = f["environments"].(map[string]any)["prod"].(map[string]any)
 	if prod["enabled"] != true || prod["rollout_percentage"] != 25.0 || len(prod["rules"].([]any)) != 1 {
 		t.Fatalf("prod after update = %v", prod)
@@ -264,7 +264,7 @@ func TestEvaluate(t *testing.T) {
 	c := newClient(t, flagtest.NewMemory())
 	c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
 	c.mustDo("PUT", "/api/v1/flags/new-checkout/environments/prod",
-		`{"enabled":true,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}]}`, 200)
+		`{"enabled":true,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}],"reason":"test"}`, 200)
 
 	tests := []struct {
 		body        string
@@ -363,7 +363,16 @@ func TestRolePermissions(t *testing.T) {
 		{"PUT", "/api/v1/flags/new-checkout/environments/dev", `{"enabled":true,"rollout_percentage":50}`, auth.RoleEditor, 200},
 		{"PUT", "/api/v1/flags/new-checkout/environments/staging", `{"enabled":true,"rollout_percentage":50}`, auth.RoleEditor, 200},
 
-		{"PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":50}`, auth.RoleAdmin, 200},
+		// Admins with a reason (emergency); everyone else needs a change request.
+		{"PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":50,"reason":"outage"}`, auth.RoleAdmin, 200},
+		// The kill switch: turning prod off directly.
+		{"PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":false,"rollout_percentage":100}`, auth.RoleEditor, 200},
+		{"POST", "/api/v1/flags/new-checkout/environments/prod/requests", `{"enabled":true,"rollout_percentage":50,"reason":"launch"}`, auth.RoleEditor, 201},
+		{"GET", "/api/v1/requests", "", auth.RoleViewer, 200},
+		{"GET", "/api/v1/requests/{request}", "", auth.RoleViewer, 200},
+		// other's steward is mel, so only approvers and admins review it here.
+		{"POST", "/api/v1/requests/{request}/approve", `{"comment":"ok"}`, auth.RoleApprover, 200},
+		{"POST", "/api/v1/requests/{request}/reject", `{"comment":"no"}`, auth.RoleApprover, 200},
 		{"DELETE", "/api/v1/flags/new-checkout", "", auth.RoleAdmin, 204},
 		// new-checkout's steward is mel, so only admins can reassign it here.
 		{"PUT", "/api/v1/flags/new-checkout/steward", `{"steward":"sam"}`, auth.RoleAdmin, 200},
@@ -389,8 +398,11 @@ func TestRolePermissions(t *testing.T) {
 				t.Run(via+" "+string(role)+" "+rt.method+" "+rt.path, func(t *testing.T) {
 					c := newClient(t, flagtest.NewMemory())
 					c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
-					c.newUser("sam", auth.RoleEditor)
+					sam := c.as(c.newUser("sam", auth.RoleEditor))
 					c.newSDKKey("prod")
+					// A pending request by sam for u to review.
+					c.mustDo("POST", "/api/v1/flags", `{"key":"other","name":"Other"}`, 201)
+					req := sam.mustDo("POST", "/api/v1/flags/other/environments/prod/requests", `{"enabled":true,"rollout_percentage":10}`, 201)
 					u := c.as(c.newUser("u", role))
 					if via == "session" {
 						u = u.login()
@@ -403,6 +415,7 @@ func TestRolePermissions(t *testing.T) {
 						"{samToken}", strconv.FormatInt(samToks[0].ID, 10),
 						"{myToken}", strconv.FormatInt(myToks[0].ID, 10),
 						"{sdkKey}", strconv.FormatInt(keys[0].ID, 10),
+						"{request}", strconv.FormatFloat(req["id"].(float64), 'f', 0, 64),
 					).Replace(rt.path)
 
 					before := snapshot(t, c)
@@ -430,7 +443,7 @@ func snapshot(t *testing.T, c *client) string {
 	for _, path := range []string{
 		"/api/v1/flags/new-checkout", "/api/v1/flags/new-checkout/audit", "/api/v1/flags",
 		"/api/v1/users", "/api/v1/users/sam/audit", "/api/v1/users/sam/tokens",
-		"/api/v1/sdk-keys", "/api/v1/environments",
+		"/api/v1/sdk-keys", "/api/v1/environments", "/api/v1/requests", "/api/v1/flags/other",
 	} {
 		out, _ := json.Marshal(c.mustDo("GET", path, "", 200))
 		b.Write(out)
@@ -576,9 +589,9 @@ func TestEnvironmentEndpoints(t *testing.T) {
 	}
 	editor.mustDo("PUT", "/api/v1/flags/new-checkout/environments/qa", `{"enabled":true,"rollout_percentage":100}`, 200)
 
-	// Protecting it locks editors out.
+	// Once it's protected, editors need a change request to turn it on.
 	c.mustDo("PUT", "/api/v1/environments/qa", `{"name":"QA","protected":true}`, 200)
-	editor.mustDo("PUT", "/api/v1/flags/new-checkout/environments/qa", `{"enabled":false,"rollout_percentage":100}`, 403)
+	editor.mustDo("PUT", "/api/v1/flags/new-checkout/environments/qa", `{"enabled":true,"rollout_percentage":50}`, 403)
 
 	c.mustDo("POST", "/api/v1/environments", `{"key":"qa","name":"Again"}`, 409)
 	c.mustDo("POST", "/api/v1/environments", `{"key":"Bad Key","name":"x"}`, 400)

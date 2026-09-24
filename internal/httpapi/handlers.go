@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Melmonster13/featuresteward/internal/auth"
@@ -194,21 +195,22 @@ func (s *server) archiveFlag(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// updateEnvironment sets a flag's config in one environment. Protected
+// environments take changes through change requests, except turning the
+// flag off (the kill switch) and an admin's emergency change with a reason.
 func (s *server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 	env, err := s.flags.GetEnvironment(r.Context(), r.PathValue("env"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	// Until approvals exist (Milestone 5), only admins change protected environments.
-	if env.Protected && !principalFrom(r).user.Role.AtLeast(auth.RoleAdmin) {
-		writeError(w, http.StatusForbidden, "changes to protected environment "+env.Key+" need the admin role")
-		return
-	}
 	var req struct {
 		Enabled           *bool       `json:"enabled"`
 		RolloutPercentage *int        `json:"rollout_percentage"`
 		Rules             []eval.Rule `json:"rules"`
+		// Reason makes an admin's direct change to a protected
+		// environment an emergency change.
+		Reason string `json:"reason"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -219,12 +221,56 @@ func (s *server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := flag.EnvConfig{Enabled: *req.Enabled, RolloutPercentage: *req.RolloutPercentage, Rules: req.Rules}
-	f, err := s.flags.UpdateEnvironment(r.Context(), actor(r), r.PathValue("key"), env.Key, cfg)
+	if err := cfg.Validate(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	key := r.PathValue("key")
+	reason := ""
+	if env.Protected {
+		reason = strings.TrimSpace(req.Reason)
+		allowed, err := s.directChangeAllowed(r, key, env.Key, cfg, reason)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if !allowed {
+			msg := "changes to " + env.Name + " need an approved change request: POST /api/v1/flags/" + key +
+				"/environments/" + env.Key + "/requests. "
+			if principalFrom(r).user.Role.AtLeast(auth.RoleAdmin) {
+				msg += "Admins can apply an emergency change by including a reason."
+			} else {
+				msg += "Turning the flag off is allowed directly."
+			}
+			writeError(w, http.StatusForbidden, msg)
+			return
+		}
+	}
+	f, err := s.flags.UpdateEnvironment(r.Context(), actor(r), key, env.Key, cfg, reason)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toFlagJSON(f))
+}
+
+// directChangeAllowed reports whether cfg may skip approval in a protected
+// environment: an admin with a reason, or anyone turning the flag off
+// without changing anything else.
+func (s *server) directChangeAllowed(r *http.Request, key, env string, cfg flag.EnvConfig, reason string) (bool, error) {
+	if reason != "" && principalFrom(r).user.Role.AtLeast(auth.RoleAdmin) {
+		return true, nil
+	}
+	if cfg.Enabled {
+		return false, nil
+	}
+	f, err := s.flags.GetFlag(r.Context(), key)
+	if err != nil {
+		return false, err
+	}
+	off := f.Environments[env]
+	off.Enabled = false
+	return cfg.Equal(off), nil
 }
 
 func (s *server) listAudit(w http.ResponseWriter, r *http.Request) {

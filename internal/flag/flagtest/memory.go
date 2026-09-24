@@ -96,7 +96,7 @@ func (m *Memory) UpdateFlag(_ context.Context, actor, key, name, description str
 	return clone(f), nil
 }
 
-func (m *Memory) UpdateEnvironment(_ context.Context, actor, key, env string, cfg flag.EnvConfig) (flag.Flag, error) {
+func (m *Memory) UpdateEnvironment(_ context.Context, actor, key, env string, cfg flag.EnvConfig, reason string) (flag.Flag, error) {
 	if err := cfg.Validate(); err != nil {
 		return flag.Flag{}, err
 	}
@@ -113,7 +113,7 @@ func (m *Memory) UpdateEnvironment(_ context.Context, actor, key, env string, cf
 	}
 	f.Environments[env] = cfg
 	f.UpdatedAt = time.Now()
-	m.audit(actor, flag.ActionEnvUpdated, key, env, before, cfg)
+	m.audit(actor, flag.ActionEnvUpdated, key, env, before, flag.NewEnvChange(cfg, reason))
 	return clone(f), nil
 }
 

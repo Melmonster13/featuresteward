@@ -70,6 +70,22 @@ func NewRequestSnapshot(r ChangeRequest) RequestSnapshot {
 	}
 }
 
+// EmergencyChange is the audit record of an environment change made with
+// a reason instead of an approved request.
+type EmergencyChange struct {
+	EnvConfig
+	Reason string `json:"emergency_reason"`
+}
+
+// NewEnvChange returns the audit record for setting cfg: the config
+// itself, or an EmergencyChange when there's a reason.
+func NewEnvChange(cfg EnvConfig, reason string) any {
+	if reason == "" {
+		return cfg
+	}
+	return EmergencyChange{EnvConfig: cfg, Reason: reason}
+}
+
 // Equal reports whether two configs behave the same. Nil and empty rules
 // are equal.
 func (c EnvConfig) Equal(o EnvConfig) bool {

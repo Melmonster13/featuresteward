@@ -90,6 +90,11 @@ func run(log *slog.Logger) error {
 				if err := db.DeleteExpiredSessions(ctx); err != nil {
 					log.Error("delete expired sessions", "err", err)
 				}
+				if n, err := db.ExpireChangeRequests(ctx); err != nil {
+					log.Error("expire change requests", "err", err)
+				} else if n > 0 {
+					log.Info("expired change requests", "count", n)
+				}
 			}
 		}
 	}()
