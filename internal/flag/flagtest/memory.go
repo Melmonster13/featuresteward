@@ -19,10 +19,11 @@ import (
 )
 
 type Memory struct {
-	mu     sync.Mutex
-	envs   []flag.Environment
-	flags  map[string]*flag.Flag
-	events []audit.Event
+	mu       sync.Mutex
+	envs     []flag.Environment
+	flags    map[string]*flag.Flag
+	events   []audit.Event
+	requests []*flag.ChangeRequest
 }
 
 var _ flag.Store = (*Memory)(nil)

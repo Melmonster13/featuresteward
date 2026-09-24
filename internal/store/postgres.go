@@ -124,15 +124,8 @@ func (s *Postgres) UpdateEnvironment(ctx context.Context, actor, key, env string
 	if err := cfg.Validate(); err != nil {
 		return flag.Flag{}, err
 	}
-	if cfg.Rules == nil {
-		cfg.Rules = []eval.Rule{}
-	}
-	rules, err := json.Marshal(cfg.Rules)
-	if err != nil {
-		return flag.Flag{}, err
-	}
 	var out flag.Flag
-	err = s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inTx(ctx, func(q *db.Queries) error {
 		f, err := lockActive(ctx, q, key)
 		if err != nil {
 			return err
@@ -145,19 +138,7 @@ func (s *Postgres) UpdateEnvironment(ctx context.Context, actor, key, env string
 		if err != nil {
 			return err
 		}
-		if err := q.UpdateFlagEnvironment(ctx, db.UpdateFlagEnvironmentParams{
-			FlagID:            f.ID,
-			Environment:       env,
-			Enabled:           cfg.Enabled,
-			RolloutPercentage: int16(cfg.RolloutPercentage),
-			Rules:             rules,
-		}); err != nil {
-			return err
-		}
-		if err := q.TouchFlag(ctx, f.ID); err != nil {
-			return err
-		}
-		if err := flagAudit(ctx, q, actor, flag.ActionEnvUpdated, key, env, before, cfg); err != nil {
+		if err := writeEnv(ctx, q, actor, f, env, before, cfg); err != nil {
 			return err
 		}
 		row, err := q.GetFlag(ctx, key)
@@ -306,6 +287,30 @@ func lockActive(ctx context.Context, q *db.Queries, key string) (db.Flag, error)
 		return db.Flag{}, fmt.Errorf("flag %q is archived: %w", key, flag.ErrNotFound)
 	}
 	return f, nil
+}
+
+// writeEnv stores cfg for a locked flag in env and audits the change from before.
+func writeEnv(ctx context.Context, q *db.Queries, actor string, f db.Flag, env string, before, cfg flag.EnvConfig) error {
+	if cfg.Rules == nil {
+		cfg.Rules = []eval.Rule{}
+	}
+	rules, err := json.Marshal(cfg.Rules)
+	if err != nil {
+		return err
+	}
+	if err := q.UpdateFlagEnvironment(ctx, db.UpdateFlagEnvironmentParams{
+		FlagID:            f.ID,
+		Environment:       env,
+		Enabled:           cfg.Enabled,
+		RolloutPercentage: int16(cfg.RolloutPercentage),
+		Rules:             rules,
+	}); err != nil {
+		return err
+	}
+	if err := q.TouchFlag(ctx, f.ID); err != nil {
+		return err
+	}
+	return flagAudit(ctx, q, actor, flag.ActionEnvUpdated, f.Key, env, before, cfg)
 }
 
 func flagAudit(ctx context.Context, q *db.Queries, actor, action, key, env string, before, after any) error {

@@ -6,6 +6,7 @@ sql:
       - internal/store/queries.sql
       - internal/store/auth_queries.sql
       - internal/store/idempotency_queries.sql
+      - internal/store/request_queries.sql
     gen:
       go:
         package: db

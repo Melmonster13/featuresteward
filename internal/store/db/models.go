@@ -32,6 +32,22 @@ type AuditEvent struct {
 	SubjectUser *string
 }
 
+type ChangeRequest struct {
+	ID            int64
+	FlagID        int64
+	Environment   string
+	RequestedBy   string
+	Reason        string
+	Base          []byte
+	Proposed      []byte
+	Status        string
+	ReviewedBy    *string
+	ReviewComment string
+	CreatedAt     pgtype.Timestamptz
+	ExpiresAt     pgtype.Timestamptz
+	ResolvedAt    pgtype.Timestamptz
+}
+
 type Environment struct {
 	Key       string
 	Name      string

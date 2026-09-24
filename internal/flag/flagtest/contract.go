@@ -432,6 +432,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 			t.Fatalf("store state changed via caller's slice: %+v", got.Rules)
 		}
 	})
+	runRequestContract(t, newStore)
 }
 
 func mustCreate(t *testing.T, s flag.Store, key string) flag.Flag {

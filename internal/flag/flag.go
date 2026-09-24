@@ -150,4 +150,27 @@ type Store interface {
 	ListEnvironmentAuditEvents(ctx context.Context, env string) ([]audit.Event, error)
 	// ListAuditEvents returns a flag's events, oldest first.
 	ListAuditEvents(ctx context.Context, flagKey string) ([]audit.Event, error)
+
+	// CreateChangeRequest proposes cfg for a flag in env, based on its
+	// current config there. Only one request can be pending per flag and
+	// environment (ErrConflict), and cfg must differ from the current
+	// config (ErrInvalid).
+	CreateChangeRequest(ctx context.Context, actor, key, env string, cfg EnvConfig, reason string, expiresAt time.Time) (ChangeRequest, error)
+	GetChangeRequest(ctx context.Context, id int64) (ChangeRequest, error)
+	// ListChangeRequests returns matching requests, newest first.
+	ListChangeRequests(ctx context.Context, filter RequestFilter) ([]ChangeRequest, error)
+	// ApproveChangeRequest applies a pending request's config and marks it
+	// approved, in one transaction. The requester can't approve it
+	// (ErrForbidden). It fails with ErrConflict if the request isn't
+	// pending, has expired, or the environment changed since it was made.
+	ApproveChangeRequest(ctx context.Context, actor string, id int64, comment string) (ChangeRequest, error)
+	// RejectChangeRequest closes a pending request without applying it.
+	// The requester cancels instead (ErrForbidden).
+	RejectChangeRequest(ctx context.Context, actor string, id int64, comment string) (ChangeRequest, error)
+	// CancelChangeRequest withdraws a pending request. Only its requester
+	// can (ErrForbidden).
+	CancelChangeRequest(ctx context.Context, actor string, id int64) (ChangeRequest, error)
+	// ExpireChangeRequests marks pending requests past their expiry as
+	// expired and returns how many it marked.
+	ExpireChangeRequests(ctx context.Context) (int, error)
 }
