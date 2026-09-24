@@ -237,3 +237,94 @@ new-checkout  on   25% +1 rule  off      @mel
 		t.Errorf("unknown env = %d %q", code, errOut)
 	}
 }
+
+func TestFlagCommands(t *testing.T) {
+	h := newHarness(t)
+	tok := h.token("mel", auth.RoleAdmin)
+	h.token("sam", auth.RoleEditor)
+	h.mustStew(tok, "login", "--url", h.url)
+
+	// Flags may come after the positional argument.
+	out := h.mustStew("", "create", "new-checkout", "--name", "New checkout", "--description", "Faster checkout")
+	if !strings.Contains(out, "Created new-checkout (steward @mel)") {
+		t.Errorf("create = %q", out)
+	}
+	if code, _, errOut := h.stew("", "create", "new-checkout", "--name", "Again"); code != 1 || !strings.Contains(errOut, "stew create:") {
+		t.Errorf("duplicate create = %d %q", code, errOut)
+	}
+
+	// toggle and rollout each change one field and keep the rest.
+	h.api(tok, "PUT", "/api/v1/flags/new-checkout/environments/prod",
+		`{"enabled":false,"rollout_percentage":25,"rules":[{"attribute":"group","values":["staff"],"serve":true}]}`)
+	if out := h.mustStew("", "toggle", "new-checkout", "prod", "on"); out != "new-checkout in prod: 25% +1 rule\n" {
+		t.Errorf("toggle = %q", out)
+	}
+	if out := h.mustStew("", "rollout", "new-checkout", "prod", "50%"); out != "new-checkout in prod: 50% +1 rule\n" {
+		t.Errorf("rollout = %q", out)
+	}
+	h.mustStew("", "rollout", "new-checkout", "dev", "0")
+	if _, _, errOut := h.stew("", "toggle", "new-checkout", "dev", "on"); !strings.Contains(errOut, "rollout is 0%") {
+		t.Errorf("no 0%% note: %q", errOut)
+	}
+
+	h.mustStew("", "steward", "new-checkout", "@sam")
+	out = h.mustStew("", "status", "new-checkout")
+	for _, want := range []string{
+		"new-checkout  New checkout\n  Faster checkout\nSteward: @sam\n",
+		"dev               on 0%   -\n",
+		"prod (protected)  on 50%  group in [staff] → on\n",
+		"staging           off     -\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status missing %q:\n%s", want, out)
+		}
+	}
+
+	if code, _, errOut := h.stew("", "archive", "new-checkout"); code != 2 || !strings.Contains(errOut, "--yes") {
+		t.Errorf("archive without --yes = %d %q", code, errOut)
+	}
+	h.mustStew("", "archive", "new-checkout", "--yes")
+	if out := h.mustStew("", "status", "new-checkout"); !strings.Contains(out, "Archived: ") {
+		t.Errorf("status after archive:\n%s", out)
+	}
+	if code, _, errOut := h.stew("", "status", "nope"); code != 1 || !strings.Contains(errOut, "not found") {
+		t.Errorf("status of unknown flag = %d %q", code, errOut)
+	}
+}
+
+func TestFlagCommandPermissions(t *testing.T) {
+	h := newHarness(t)
+	admin := h.token("mel", auth.RoleAdmin)
+	h.api(admin, "POST", "/api/v1/flags", `{"key":"dark-mode","name":"Dark mode"}`)
+	h.env["STEW_URL"] = h.url
+	h.env["STEW_TOKEN"] = h.token("sam", auth.RoleEditor)
+
+	h.mustStew("", "toggle", "dark-mode", "dev", "on")
+	if code, _, errOut := h.stew("", "toggle", "dark-mode", "prod", "on"); code != 1 || !strings.Contains(errOut, "protected environment prod") {
+		t.Errorf("editor toggling prod = %d %q", code, errOut)
+	}
+	if code, _, errOut := h.stew("", "steward", "dark-mode", "sam"); code != 1 || !strings.Contains(errOut, "current steward") {
+		t.Errorf("editor taking a flag = %d %q", code, errOut)
+	}
+	if code, _, _ := h.stew("", "archive", "dark-mode", "--yes"); code != 1 {
+		t.Errorf("editor archiving = %d, want 1", code)
+	}
+}
+
+func TestFlagCommandUsage(t *testing.T) {
+	h := newHarness(t)
+	for _, args := range [][]string{
+		{"status"},
+		{"status", "a", "b"},
+		{"create", "x"},
+		{"toggle", "x", "dev"},
+		{"toggle", "x", "dev", "maybe"},
+		{"rollout", "x", "dev", "101"},
+		{"rollout", "x", "dev", "half"},
+		{"steward", "x"},
+	} {
+		if code, _, _ := h.stew("", args...); code != 2 {
+			t.Errorf("stew %v = %d, want 2", args, code)
+		}
+	}
+}

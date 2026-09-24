@@ -24,6 +24,13 @@ Usage:
   stew whoami                               show who you're logged in as
   stew list [--env <env>] [--steward <handle>|none]
                                             list flags
+  stew status <flag>                        show a flag in every environment
+  stew create <flag> --name <name> [--description <text>] [--steward <handle>]
+                                            create a flag (off everywhere)
+  stew toggle <flag> <env> on|off           turn a flag on or off
+  stew rollout <flag> <env> <percent>       set the percentage rollout
+  stew steward <flag> <handle>              reassign the flag's steward
+  stew archive <flag> --yes                 archive a flag (admins only)
 
 Environment: STEW_URL and STEW_TOKEN override the saved login.
 `
@@ -54,10 +61,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 		return 0
 	}
 	commands := map[string]func(*env, []string) error{
-		"login":  cmdLogin,
-		"logout": cmdLogout,
-		"whoami": cmdWhoami,
-		"list":   cmdList,
+		"login":   cmdLogin,
+		"logout":  cmdLogout,
+		"whoami":  cmdWhoami,
+		"list":    cmdList,
+		"status":  cmdStatus,
+		"create":  cmdCreate,
+		"toggle":  cmdToggle,
+		"rollout": cmdRollout,
+		"steward": cmdSteward,
+		"archive": cmdArchive,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {
@@ -84,15 +97,34 @@ func (e *env) flags(name string) *flag.FlagSet {
 }
 
 func (e *env) parse(fs *flag.FlagSet, args []string) error {
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+	_, err := e.parseArgs(fs, args)
+	return err
+}
+
+// parseArgs parses flags placed anywhere on the line and returns exactly
+// one positional argument per name.
+func (e *env) parseArgs(fs *flag.FlagSet, args []string, names ...string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, errUsage
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		pos = append(pos, fs.Arg(0))
+		args = fs.Args()[1:]
 	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(e.stderr, "stew: unexpected argument %q\n", fs.Arg(0))
+	if len(pos) != len(names) {
+		if len(pos) > len(names) {
+			fmt.Fprintf(e.stderr, "stew: unexpected argument %q\n", pos[len(names)])
+		} else {
+			fmt.Fprintf(e.stderr, "stew: missing <%s>\n", names[len(pos)])
+		}
 		fs.Usage()
-		return errUsage
+		return nil, errUsage
 	}
-	return nil
+	return pos, nil
 }
 
 // client returns an API client from the saved login.

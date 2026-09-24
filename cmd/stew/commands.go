@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -177,4 +178,191 @@ func stewardName(s *string) string {
 		return "(none)"
 	}
 	return "@" + *s
+}
+
+func cmdStatus(e *env, args []string) error {
+	pos, err := e.parseArgs(e.flags("status"), args, "flag")
+	if err != nil {
+		return err
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	f, err := c.Flag(e.ctx, pos[0])
+	if err != nil {
+		return err
+	}
+	envs, err := c.ListEnvironments(e.ctx)
+	if err != nil {
+		return err
+	}
+	printFlag(e, f, envs)
+	return nil
+}
+
+func printFlag(e *env, f client.Flag, envs []client.Environment) {
+	fmt.Fprintf(e.stdout, "%s  %s\n", f.Key, f.Name)
+	if f.Description != "" {
+		fmt.Fprintf(e.stdout, "  %s\n", f.Description)
+	}
+	fmt.Fprintf(e.stdout, "Steward: %s\n", stewardName(f.Steward))
+	if f.ArchivedAt != nil {
+		fmt.Fprintf(e.stdout, "Archived: %s\n", f.ArchivedAt.Format("2006-01-02 15:04 MST"))
+	}
+	fmt.Fprintln(e.stdout)
+	tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ENV\tSTATE\tRULES")
+	for _, en := range envs {
+		cfg := f.Environments[en.Key]
+		st := "off"
+		if cfg.Enabled {
+			st = fmt.Sprintf("on %d%%", cfg.RolloutPercentage)
+		}
+		name := en.Key
+		if en.Protected {
+			name += " (protected)"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", name, st, rules(cfg.Rules))
+	}
+	tw.Flush()
+}
+
+// rules renders targeting rules, e.g. "group in [staff] → on".
+func rules(rs []client.Rule) string {
+	if len(rs) == 0 {
+		return "-"
+	}
+	var out []string
+	for _, r := range rs {
+		serve := "off"
+		if r.Serve {
+			serve = "on"
+		}
+		out = append(out, fmt.Sprintf("%s in [%s] → %s", r.Attribute, strings.Join(r.Values, ", "), serve))
+	}
+	return strings.Join(out, "; ")
+}
+
+func cmdCreate(e *env, args []string) error {
+	fs := e.flags("create")
+	name := fs.String("name", "", "human-readable name (required)")
+	desc := fs.String("description", "", "what the flag is for")
+	steward := fs.String("steward", "", "steward handle (default: you)")
+	pos, err := e.parseArgs(fs, args, "flag")
+	if err != nil {
+		return err
+	}
+	if *name == "" {
+		fmt.Fprintln(e.stderr, "stew create: --name is required")
+		fs.Usage()
+		return errUsage
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	f, err := c.CreateFlag(e.ctx, pos[0], *name, *desc, *steward)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.stdout, "Created %s (steward %s). It's off in every environment.\n", f.Key, stewardName(f.Steward))
+	return nil
+}
+
+func cmdToggle(e *env, args []string) error {
+	pos, err := e.parseArgs(e.flags("toggle"), args, "flag", "env", "on|off")
+	if err != nil {
+		return err
+	}
+	var on bool
+	switch pos[2] {
+	case "on":
+		on = true
+	case "off":
+	default:
+		fmt.Fprintf(e.stderr, "stew toggle: expected on or off, got %q\n", pos[2])
+		return errUsage
+	}
+	return updateEnv(e, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.Enabled = on })
+}
+
+func cmdRollout(e *env, args []string) error {
+	pos, err := e.parseArgs(e.flags("rollout"), args, "flag", "env", "percent")
+	if err != nil {
+		return err
+	}
+	pct, err := strconv.Atoi(strings.TrimSuffix(pos[2], "%"))
+	if err != nil || pct < 0 || pct > 100 {
+		fmt.Fprintf(e.stderr, "stew rollout: percent must be a whole number 0-100, got %q\n", pos[2])
+		return errUsage
+	}
+	return updateEnv(e, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.RolloutPercentage = pct })
+}
+
+// updateEnv changes one field of a flag's environment config and keeps
+// the rest, since the API replaces the whole config.
+func updateEnv(e *env, key, envKey string, change func(*client.EnvConfig)) error {
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	f, err := c.Flag(e.ctx, key)
+	if err != nil {
+		return err
+	}
+	cfg, ok := f.Environments[envKey]
+	if !ok {
+		return fmt.Errorf("unknown environment %q", envKey)
+	}
+	change(&cfg)
+	f, err = c.SetEnvironment(e.ctx, key, envKey, cfg)
+	if err != nil {
+		return err
+	}
+	cfg = f.Environments[envKey]
+	fmt.Fprintf(e.stdout, "%s in %s: %s\n", key, envKey, state(cfg))
+	if cfg.Enabled && cfg.RolloutPercentage == 0 && len(cfg.Rules) == 0 {
+		fmt.Fprintf(e.stderr, "note: the rollout is 0%%, so nobody gets it yet; run: stew rollout %s %s <percent>\n", key, envKey)
+	}
+	return nil
+}
+
+func cmdSteward(e *env, args []string) error {
+	pos, err := e.parseArgs(e.flags("steward"), args, "flag", "handle")
+	if err != nil {
+		return err
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	f, err := c.SetSteward(e.ctx, pos[0], strings.TrimPrefix(pos[1], "@"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.stdout, "%s is now stewarded by %s\n", f.Key, stewardName(f.Steward))
+	return nil
+}
+
+func cmdArchive(e *env, args []string) error {
+	fs := e.flags("archive")
+	yes := fs.Bool("yes", false, "confirm archiving; evaluating the flag then returns not found")
+	pos, err := e.parseArgs(fs, args, "flag")
+	if err != nil {
+		return err
+	}
+	if !*yes {
+		fmt.Fprintf(e.stderr, "stew archive: after archiving, evaluating %s returns not found; rerun with --yes to confirm\n", pos[0])
+		return errUsage
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	if err := c.ArchiveFlag(e.ctx, pos[0]); err != nil {
+		return err
+	}
+	fmt.Fprintf(e.stdout, "Archived %s.\n", pos[0])
+	return nil
 }
