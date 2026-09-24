@@ -5,3 +5,6 @@
 *.pem
 *.key
 /bin/
+/web/node_modules/
+/web/dist/*
+!/web/dist/.keep

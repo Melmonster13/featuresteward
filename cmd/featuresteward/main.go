@@ -14,6 +14,7 @@ import (
 
 	"github.com/Melmonster13/featuresteward/internal/httpapi"
 	"github.com/Melmonster13/featuresteward/internal/store"
+	"github.com/Melmonster13/featuresteward/web"
 )
 
 func main() {
@@ -61,9 +62,14 @@ func run(log *slog.Logger) error {
 	defer pool.Close()
 
 	db := store.NewPostgres(pool)
+	api := httpapi.NewRouter(db, db, db, log)
+	mux := http.NewServeMux()
+	mux.Handle("/api/", api)
+	mux.Handle("/healthz", api)
+	mux.Handle("/", web.Handler())
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           httpapi.NewRouter(db, db, db, log),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

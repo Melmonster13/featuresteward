@@ -1,4 +1,4 @@
-.PHONY: run test test-int lint build stew up down migrate migrate-down admin generate
+.PHONY: run test test-int lint build stew web web-dev up down migrate migrate-down admin generate
 
 DATABASE_URL ?= postgres://featuresteward:featuresteward@localhost:5432/featuresteward?sslmode=disable
 SQLC_IMAGE := sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537
@@ -24,6 +24,14 @@ build:
 
 stew:
 	go build -o bin/stew ./cmd/stew
+
+# Builds the dashboard into web/dist, which the server embeds.
+web:
+	cd web && npm ci --ignore-scripts && npm run build
+
+# Dashboard with live reload at http://localhost:3000; needs the API on :8080.
+web-dev:
+	cd web && npm run dev
 
 up:
 	docker compose up --build
