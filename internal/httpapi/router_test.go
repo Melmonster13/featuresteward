@@ -328,3 +328,62 @@ func TestInternalErrorsAreHidden(t *testing.T) {
 		t.Fatalf("got %d %v", code, out)
 	}
 }
+
+// TestRolePermissions checks every route against every role. Add new
+// routes here.
+func TestRolePermissions(t *testing.T) {
+	routes := []struct {
+		method, path, body string
+		min                auth.Role
+		want               int // status when allowed
+	}{
+		{"GET", "/api/v1/environments", "", auth.RoleViewer, 200},
+		{"GET", "/api/v1/flags", "", auth.RoleViewer, 200},
+		{"GET", "/api/v1/flags/new-checkout", "", auth.RoleViewer, 200},
+		{"GET", "/api/v1/flags/new-checkout/audit", "", auth.RoleViewer, 200},
+		{"POST", "/api/v1/evaluate", `{"flag":"new-checkout","environment":"prod"}`, auth.RoleViewer, 200},
+		{"POST", "/api/v1/flags", `{"key":"another","name":"Another"}`, auth.RoleEditor, 201},
+		{"PUT", "/api/v1/flags/new-checkout", `{"name":"Renamed"}`, auth.RoleEditor, 200},
+		{"PUT", "/api/v1/flags/new-checkout/environments/dev", `{"enabled":true,"rollout_percentage":50}`, auth.RoleEditor, 200},
+		{"PUT", "/api/v1/flags/new-checkout/environments/staging", `{"enabled":true,"rollout_percentage":50}`, auth.RoleEditor, 200},
+		{"PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":50}`, auth.RoleAdmin, 200},
+		{"DELETE", "/api/v1/flags/new-checkout", "", auth.RoleAdmin, 204},
+	}
+	for _, role := range []auth.Role{auth.RoleViewer, auth.RoleEditor, auth.RoleApprover, auth.RoleAdmin} {
+		for _, rt := range routes {
+			t.Run(string(role)+" "+rt.method+" "+rt.path, func(t *testing.T) {
+				c := newClient(t, flagtest.NewMemory())
+				c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+				before := c.mustDo("GET", "/api/v1/flags/new-checkout/audit", "", 200)
+
+				code, out := c.as(c.newUser("u", role)).do(rt.method, rt.path, rt.body)
+				want := rt.want
+				if !role.AtLeast(rt.min) {
+					want = 403
+				}
+				if code != want {
+					t.Fatalf("got %d %v, want %d", code, out, want)
+				}
+				if code == 403 {
+					after := c.mustDo("GET", "/api/v1/flags/new-checkout/audit", "", 200)
+					if len(after["events"].([]any)) != len(before["events"].([]any)) {
+						t.Errorf("denied request changed the audit log")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestEnvironmentsShowProtection(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	envs := c.mustDo("GET", "/api/v1/environments", "", 200)["environments"].([]any)
+	prot := map[string]bool{}
+	for _, e := range envs {
+		m := e.(map[string]any)
+		prot[m["key"].(string)] = m["protected"].(bool)
+	}
+	if len(prot) != 3 || !prot["prod"] || prot["dev"] || prot["staging"] {
+		t.Fatalf("environments = %v", envs)
+	}
+}

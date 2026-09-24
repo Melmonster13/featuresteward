@@ -55,6 +55,22 @@ func (q *Queries) CreateFlagEnvironments(ctx context.Context, flagID int64) erro
 	return err
 }
 
+const getEnvironment = `-- name: GetEnvironment :one
+SELECT key, name, created_at, protected FROM environments WHERE key = $1
+`
+
+func (q *Queries) GetEnvironment(ctx context.Context, key string) (Environment, error) {
+	row := q.db.QueryRow(ctx, getEnvironment, key)
+	var i Environment
+	err := row.Scan(
+		&i.Key,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Protected,
+	)
+	return i, err
+}
+
 const getEvalConfig = `-- name: GetEvalConfig :one
 SELECT fe.enabled, fe.rollout_percentage, fe.rules
 FROM flags f
@@ -204,22 +220,27 @@ func (q *Queries) ListAuditEvents(ctx context.Context, flagKey *string) ([]Audit
 }
 
 const listEnvironments = `-- name: ListEnvironments :many
-SELECT key FROM environments ORDER BY key
+SELECT key, name, created_at, protected FROM environments ORDER BY key
 `
 
-func (q *Queries) ListEnvironments(ctx context.Context) ([]string, error) {
+func (q *Queries) ListEnvironments(ctx context.Context) ([]Environment, error) {
 	rows, err := q.db.Query(ctx, listEnvironments)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []Environment
 	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
+		var i Environment
+		if err := rows.Scan(
+			&i.Key,
+			&i.Name,
+			&i.CreatedAt,
+			&i.Protected,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, key)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

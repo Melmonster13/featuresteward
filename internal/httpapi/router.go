@@ -26,19 +26,25 @@ type server struct {
 // NewRouter returns the API handler. Every /api/v1 route needs
 // "Authorization: Bearer <credential>": a user's API token, or for
 // POST /api/v1/evaluate only, an SDK key.
+//
+// Each route names the minimum role it needs. Roles are cumulative, and
+// every user is at least a viewer.
 func NewRouter(flags flag.Store, users auth.Store, log *slog.Logger) http.Handler {
 	s := &server{flags: flags, users: users, log: log}
 
 	api := http.NewServeMux()
-	user := func(pattern string, h http.HandlerFunc) { api.Handle(pattern, userOnly(h)) }
-	user("GET /api/v1/environments", s.listEnvironments)
-	user("GET /api/v1/flags", s.listFlags)
-	user("POST /api/v1/flags", s.createFlag)
-	user("GET /api/v1/flags/{key}", s.getFlag)
-	user("PUT /api/v1/flags/{key}", s.updateFlag)
-	user("DELETE /api/v1/flags/{key}", s.archiveFlag)
-	user("PUT /api/v1/flags/{key}/environments/{env}", s.updateEnvironment)
-	user("GET /api/v1/flags/{key}/audit", s.listAudit)
+	route := func(pattern string, min auth.Role, h http.HandlerFunc) { api.Handle(pattern, requireRole(min, h)) }
+	route("GET /api/v1/environments", auth.RoleViewer, s.listEnvironments)
+	route("GET /api/v1/flags", auth.RoleViewer, s.listFlags)
+	route("GET /api/v1/flags/{key}", auth.RoleViewer, s.getFlag)
+	route("GET /api/v1/flags/{key}/audit", auth.RoleViewer, s.listAudit)
+	route("POST /api/v1/flags", auth.RoleEditor, s.createFlag)
+	route("PUT /api/v1/flags/{key}", auth.RoleEditor, s.updateFlag)
+	// Protected environments additionally need an admin; see updateEnvironment.
+	route("PUT /api/v1/flags/{key}/environments/{env}", auth.RoleEditor, s.updateEnvironment)
+	// Archiving turns a flag off everywhere, including protected environments.
+	route("DELETE /api/v1/flags/{key}", auth.RoleAdmin, s.archiveFlag)
+	// Open to any user or SDK key.
 	api.HandleFunc("POST /api/v1/evaluate", s.evaluate)
 
 	mux := http.NewServeMux()
@@ -103,10 +109,17 @@ func unauthorized(w http.ResponseWriter) {
 	writeError(w, http.StatusUnauthorized, "missing or invalid credentials")
 }
 
-func userOnly(next http.Handler) http.Handler {
+// requireRole allows users with at least min's permissions. SDK keys
+// are always refused.
+func requireRole(min auth.Role, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if principalFrom(r).user == nil {
+		u := principalFrom(r).user
+		if u == nil {
 			writeError(w, http.StatusForbidden, "SDK keys can only call POST /api/v1/evaluate")
+			return
+		}
+		if !u.Role.AtLeast(min) {
+			writeError(w, http.StatusForbidden, "this needs the "+string(min)+" role or higher")
 			return
 		}
 		next.ServeHTTP(w, r)

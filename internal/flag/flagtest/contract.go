@@ -12,7 +12,8 @@ import (
 )
 
 // RunContract checks behavior every flag.Store must share. newStore
-// must return an empty store with environments dev, staging, and prod.
+// must return an empty store with environments dev, staging, and prod,
+// with only prod protected.
 func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 	ctx := context.Background()
 
@@ -210,9 +211,21 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 	})
 
 	t.Run("environments", func(t *testing.T) {
-		envs, err := newStore(t).ListEnvironments(ctx)
-		if err != nil || !reflect.DeepEqual(envs, []string{"dev", "prod", "staging"}) {
-			t.Fatalf("got %v, %v", envs, err)
+		s := newStore(t)
+		envs, err := s.ListEnvironments(ctx)
+		want := []flag.Environment{
+			{Key: "dev", Name: "Development"},
+			{Key: "prod", Name: "Production", Protected: true},
+			{Key: "staging", Name: "Staging"},
+		}
+		if err != nil || !reflect.DeepEqual(envs, want) {
+			t.Fatalf("got %+v, %v", envs, err)
+		}
+		if e, err := s.GetEnvironment(ctx, "prod"); err != nil || e != want[1] {
+			t.Errorf("GetEnvironment(prod) = %+v, %v", e, err)
+		}
+		if _, err := s.GetEnvironment(ctx, "qa"); !errors.Is(err, flag.ErrNotFound) {
+			t.Errorf("unknown env: got %v", err)
 		}
 	})
 

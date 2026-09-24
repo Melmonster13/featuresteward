@@ -18,7 +18,7 @@ import (
 
 type Memory struct {
 	mu     sync.Mutex
-	envs   []string
+	envs   []flag.Environment
 	flags  map[string]*flag.Flag
 	events []audit.Event
 }
@@ -27,7 +27,11 @@ var _ flag.Store = (*Memory)(nil)
 
 // NewMemory returns an empty store with the default environments.
 func NewMemory() *Memory {
-	return &Memory{envs: []string{"dev", "prod", "staging"}, flags: map[string]*flag.Flag{}}
+	return &Memory{envs: []flag.Environment{
+		{Key: "dev", Name: "Development"},
+		{Key: "prod", Name: "Production", Protected: true},
+		{Key: "staging", Name: "Staging"},
+	}, flags: map[string]*flag.Flag{}}
 }
 
 func (m *Memory) CreateFlag(_ context.Context, actor, key, name, description string) (flag.Flag, error) {
@@ -43,7 +47,7 @@ func (m *Memory) CreateFlag(_ context.Context, actor, key, name, description str
 	f := &flag.Flag{Key: key, Name: name, Description: description, CreatedAt: now, UpdatedAt: now,
 		Environments: map[string]flag.EnvConfig{}}
 	for _, e := range m.envs {
-		f.Environments[e] = flag.EnvConfig{RolloutPercentage: 100, Rules: []eval.Rule{}}
+		f.Environments[e.Key] = flag.EnvConfig{RolloutPercentage: 100, Rules: []eval.Rule{}}
 	}
 	m.flags[key] = f
 	m.audit(actor, flag.ActionCreated, key, "", nil, flag.Meta{Key: key, Name: name, Description: description})
@@ -137,8 +141,21 @@ func (m *Memory) EvalConfig(_ context.Context, key, env string) (eval.Flag, erro
 	return eval.Flag{Key: key, Enabled: cfg.Enabled, RolloutPercentage: cfg.RolloutPercentage, Rules: cloneRules(cfg.Rules)}, nil
 }
 
-func (m *Memory) ListEnvironments(context.Context) ([]string, error) {
+func (m *Memory) ListEnvironments(context.Context) ([]flag.Environment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return slices.Clone(m.envs), nil
+}
+
+func (m *Memory) GetEnvironment(_ context.Context, key string) (flag.Environment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.envs {
+		if e.Key == key {
+			return e, nil
+		}
+	}
+	return flag.Environment{}, flag.ErrNotFound
 }
 
 func (m *Memory) ListAuditEvents(_ context.Context, flagKey string) ([]audit.Event, error) {

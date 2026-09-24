@@ -36,6 +36,7 @@ type Environment struct {
 	Key       string
 	Name      string
 	CreatedAt pgtype.Timestamptz
+	Protected bool
 }
 
 type Flag struct {

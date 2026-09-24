@@ -186,8 +186,28 @@ func (s *Postgres) EvalConfig(ctx context.Context, key, env string) (eval.Flag, 
 	return eval.Flag{Key: key, Enabled: cfg.Enabled, RolloutPercentage: cfg.RolloutPercentage, Rules: cfg.Rules}, nil
 }
 
-func (s *Postgres) ListEnvironments(ctx context.Context) ([]string, error) {
-	return s.q.ListEnvironments(ctx)
+func (s *Postgres) ListEnvironments(ctx context.Context) ([]flag.Environment, error) {
+	rows, err := s.q.ListEnvironments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]flag.Environment, len(rows))
+	for i, r := range rows {
+		out[i] = toEnvironment(r)
+	}
+	return out, nil
+}
+
+func (s *Postgres) GetEnvironment(ctx context.Context, key string) (flag.Environment, error) {
+	row, err := s.q.GetEnvironment(ctx, key)
+	if err != nil {
+		return flag.Environment{}, mapErr(err)
+	}
+	return toEnvironment(row), nil
+}
+
+func toEnvironment(r db.Environment) flag.Environment {
+	return flag.Environment{Key: r.Key, Name: r.Name, Protected: r.Protected}
 }
 
 func (s *Postgres) ListAuditEvents(ctx context.Context, flagKey string) ([]audit.Event, error) {

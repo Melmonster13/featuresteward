@@ -40,6 +40,14 @@ type EnvConfig struct {
 	Rules             []eval.Rule `json:"rules"`
 }
 
+type Environment struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	// Protected environments (prod by default) need an admin to change
+	// their flags.
+	Protected bool `json:"protected"`
+}
+
 // Meta is the audit snapshot of a flag's descriptive fields.
 type Meta struct {
 	Key         string `json:"key"`
@@ -96,7 +104,9 @@ type Store interface {
 	// EvalConfig returns what eval.Evaluate needs for one flag in one environment.
 	EvalConfig(ctx context.Context, key, env string) (eval.Flag, error)
 
-	ListEnvironments(ctx context.Context) ([]string, error)
+	// ListEnvironments returns environments sorted by key.
+	ListEnvironments(ctx context.Context) ([]Environment, error)
+	GetEnvironment(ctx context.Context, key string) (Environment, error)
 	// ListAuditEvents returns a flag's events, oldest first.
 	ListAuditEvents(ctx context.Context, flagKey string) ([]audit.Event, error)
 }

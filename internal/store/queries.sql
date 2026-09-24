@@ -47,7 +47,10 @@ JOIN flag_environments fe ON fe.flag_id = f.id
 WHERE f.key = $1 AND fe.environment = $2 AND f.archived_at IS NULL;
 
 -- name: ListEnvironments :many
-SELECT key FROM environments ORDER BY key;
+SELECT * FROM environments ORDER BY key;
+
+-- name: GetEnvironment :one
+SELECT * FROM environments WHERE key = $1;
 
 -- name: InsertAuditEvent :exec
 INSERT INTO audit_events (actor, action, flag_key, environment, before, after)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Melmonster13/featuresteward/internal/auth"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 )
@@ -111,6 +112,16 @@ func (s *server) archiveFlag(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
+	env, err := s.flags.GetEnvironment(r.Context(), r.PathValue("env"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// Until approvals exist (Milestone 5), only admins change protected environments.
+	if env.Protected && !principalFrom(r).user.Role.AtLeast(auth.RoleAdmin) {
+		writeError(w, http.StatusForbidden, "changes to protected environment "+env.Key+" need the admin role")
+		return
+	}
 	var req struct {
 		Enabled           *bool       `json:"enabled"`
 		RolloutPercentage *int        `json:"rollout_percentage"`
@@ -125,7 +136,7 @@ func (s *server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := flag.EnvConfig{Enabled: *req.Enabled, RolloutPercentage: *req.RolloutPercentage, Rules: req.Rules}
-	f, err := s.flags.UpdateEnvironment(r.Context(), actor(r), r.PathValue("key"), r.PathValue("env"), cfg)
+	f, err := s.flags.UpdateEnvironment(r.Context(), actor(r), r.PathValue("key"), env.Key, cfg)
 	if err != nil {
 		s.fail(w, r, err)
 		return

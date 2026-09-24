@@ -157,7 +157,9 @@ Each user is assigned a stable bucket from `hash(flag_key + user_id) % 100`. A f
 | Approver | Approve or reject `prod` change requests |
 | Admin | Manage users, roles, environments, and steward assignments |
 
-Permissions are enforced on the server for every request, never only in the UI. Self-approval is blocked.
+Roles are cumulative: each includes the permissions of the roles above it in the table. Permissions are enforced on the server for every request, never only in the UI. Self-approval is blocked.
+
+`prod` is a **protected** environment. Until the approval workflow ships, only admins can change flags in protected environments or archive flags.
 
 ---
 
