@@ -23,18 +23,18 @@ Most teams either pay for a hosted service or hack flags into config files with 
 
 ## Features
 
-- [ ] Boolean flags per environment (`dev`, `staging`, `prod`)
-- [ ] Percentage rollouts (deterministic per user)
-- [ ] Targeting rules (user IDs, groups)
-- [ ] A steward (owner) on every flag
-- [ ] Role-based access control (viewer / editor / approver / admin)
+- [x] Boolean flags per environment (`dev`, `staging`, `prod`)
+- [x] Percentage rollouts (deterministic per user)
+- [x] Targeting rules (user IDs, groups)
+- [x] A steward (owner) on every flag
+- [x] Role-based access control (viewer / editor / approver / admin)
 - [ ] Approval workflow for production changes, routed to the flag's steward
 - [ ] Stale-flag detection with steward notifications
-- [ ] Append-only audit log (tamper-evident hash chain as a stretch goal)
+- [x] Append-only audit log (tamper-evident hash chain as a stretch goal)
 - [ ] Redis-backed evaluation cache
 - [ ] Rate-limited evaluation endpoint
-- [ ] Web dashboard
-- [ ] `stew` command-line tool
+- [x] Web dashboard
+- [x] `stew` command-line tool
 - [ ] VS Code extension (hover status and steward, autocomplete flag keys, stale-flag finder)
 
 ---
@@ -68,27 +68,33 @@ flowchart LR
 
 ## Quick start
 
-**Prerequisites:** Docker and Docker Compose.
+**Prerequisites:** Docker, and Go 1.27 or later for the `make` commands.
 
 ```bash
 git clone https://github.com/Melmonster13/featuresteward.git
 cd featuresteward
 cp .env.example .env
-docker compose up --build
+docker compose up -d --build
+make migrate
+make admin HANDLE=yourname   # prints an API token once; save it
 ```
 
-- Dashboard: http://localhost:8080
-- API: http://localhost:8080/api/v1
+Open http://localhost:8080 and sign in with that token. The API is at http://localhost:8080/api/v1.
 
 To work on the dashboard with live reload, run `make web-dev` (needs Node.js 24) and open http://localhost:3000. It forwards API calls to the server on port 8080.
 
-Run migrations, create the first admin, and seed demo data:
+---
 
-```bash
-make migrate
-make admin HANDLE=yourname   # prints an API token once; save it
-make seed
-```
+## The dashboard
+
+Sign in with an API token; the dashboard swaps it for a 12-hour session.
+
+- **Flags:** every flag's state per environment and its steward, with search and filters for environment and steward (yours, or none).
+- **Flag page:** turn a flag on or off, set its rollout and targeting rules per environment, reassign the steward, archive it, and read its history.
+- **Your tokens:** create tokens for the CLI and scripts, and revoke them.
+- **Admin pages:** add users (with a first sign-in token to send them), change roles, disable users, manage SDK keys and environments.
+
+Controls you can't use are disabled with the reason shown, and the server enforces the same rules. New tokens and SDK keys are shown once.
 
 ---
 
@@ -241,18 +247,19 @@ extensions/vscode/   VS Code extension
 ```bash
 make test         # unit tests
 make test-int     # integration tests (requires Docker)
+cd web && npm test  # dashboard tests
 ```
 
-CI runs `go vet`, unit and integration tests, a vulnerability scan, a secret scan, a Docker build, and a `stew` build for Linux, macOS, and Windows on every pull request.
+CI runs `go vet`, unit and integration tests, `govulncheck` and `npm audit`, a secret scan, the dashboard's typecheck, tests, and build, a Docker build, and a `stew` build for Linux, macOS, and Windows on every pull request.
 
 ---
 
 ## Roadmap
 
-1. Core flags + evaluation API
-2. Auth, RBAC, and audit log
-3. Stewards + `stew` CLI
-4. Dashboard
+1. ✅ Core flags + evaluation API
+2. ✅ Auth, RBAC, and audit log
+3. ✅ Stewards + `stew` CLI
+4. ✅ Dashboard
 5. Approvals for production
 6. Redis cache + rate limiting
 7. Stale-flag detection

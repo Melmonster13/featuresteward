@@ -40,6 +40,11 @@ export type Route =
   | { page: "flags"; params: URLSearchParams }
   | { page: "new-flag" }
   | { page: "flag"; key: string }
+  | { page: "tokens" }
+  | { page: "users" }
+  | { page: "user"; handle: string }
+  | { page: "sdk-keys" }
+  | { page: "environments" }
   | { page: "not-found" };
 
 export function parseRoute(hash: string): Route {
@@ -51,9 +56,42 @@ export function parseRoute(hash: string): Route {
       return { page: "flags", params: new URLSearchParams(query) };
     case "/flags/new":
       return { page: "new-flag" };
+    case "/tokens":
+      return { page: "tokens" };
+    case "/admin/users":
+      return { page: "users" };
+    case "/admin/sdk-keys":
+      return { page: "sdk-keys" };
+    case "/admin/environments":
+      return { page: "environments" };
+  }
+  if (path.startsWith("/admin/users/")) {
+    const handle = safeDecode(path.slice("/admin/users/".length));
+    return validHandle(handle) ? { page: "user", handle } : { page: "not-found" };
   }
   const key = path.startsWith("/flags/") ? safeDecode(path.slice("/flags/".length)) : "";
   return key && validKey(key) ? { page: "flag", key } : { page: "not-found" };
+}
+
+export function validHandle(handle: string): boolean {
+  return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(handle);
+}
+
+export function userHash(handle: string): string {
+  return `#/admin/users/${encodeURIComponent(handle)}`;
+}
+
+// expiryDate returns the ISO time `days` from now, or undefined for 0
+// (never expires).
+export function expiryDate(days: number, now = new Date()): string | undefined {
+  return days > 0 ? new Date(now.getTime() + days * 86_400_000).toISOString() : undefined;
+}
+
+// tokenStatus says whether a token or key still works.
+export function tokenStatus(t: { revoked_at?: string; expires_at?: string }, now = new Date()): "active" | "revoked" | "expired" {
+  if (t.revoked_at) return "revoked";
+  if (t.expires_at && new Date(t.expires_at) <= now) return "expired";
+  return "active";
 }
 
 export function flagHash(key: string): string {
@@ -121,6 +159,16 @@ export function describeEvent(e: AuditEvent, envName: (key: string) => string): 
       return `changed the steward from ${handle(before.steward)} to ${handle(after.steward)}`;
     case "flag.archived":
       return "archived the flag";
+    case "user.created":
+      return `created the user as ${after.role}`;
+    case "user.role_changed":
+      return `changed the role from ${before.role} to ${after.role}`;
+    case "user.disabled":
+      return "disabled the user and revoked their tokens";
+    case "token.created":
+      return `created token “${after.name}” (${after.prefix}…)`;
+    case "token.revoked":
+      return `revoked token “${before.name}” (${before.prefix}…)`;
     default:
       return e.action;
   }

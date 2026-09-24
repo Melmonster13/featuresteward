@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEvent, Flag } from "./api";
 import {
-  atLeast, describeEvent, lockReason, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
+  atLeast, describeEvent, expiryDate, lockReason, tokenStatus, userHash, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
 } from "./format";
 
 describe("atLeast", () => {
@@ -131,5 +131,44 @@ describe("lockReason", () => {
     expect(lockReason("approver", prod, false)).toMatch(/need an admin/);
     expect(lockReason("admin", prod, false)).toBe("");
     expect(lockReason("admin", dev, true)).toBe("Archived flags can't be changed.");
+  });
+});
+
+describe("admin routes", () => {
+  it("parses admin pages and user handles", () => {
+    expect(parseRoute("#/tokens").page).toBe("tokens");
+    expect(parseRoute("#/admin/users").page).toBe("users");
+    expect(parseRoute("#/admin/sdk-keys").page).toBe("sdk-keys");
+    expect(parseRoute("#/admin/environments").page).toBe("environments");
+    expect(parseRoute(userHash("sam.lee"))).toEqual({ page: "user", handle: "sam.lee" });
+    for (const bad of ["#/admin/users/Sam", "#/admin/users/", "#/admin/users/a%20b", "#/admin/nope"]) {
+      expect(parseRoute(bad).page).toBe("not-found");
+    }
+  });
+});
+
+describe("tokens", () => {
+  const now = new Date("2026-09-24T12:00:00Z");
+  it("computes expiry dates", () => {
+    expect(expiryDate(0, now)).toBeUndefined();
+    expect(expiryDate(30, now)).toBe("2026-10-24T12:00:00.000Z");
+  });
+  it("reports status", () => {
+    expect(tokenStatus({}, now)).toBe("active");
+    expect(tokenStatus({ expires_at: "2026-10-01T00:00:00Z" }, now)).toBe("active");
+    expect(tokenStatus({ expires_at: "2026-09-01T00:00:00Z" }, now)).toBe("expired");
+    expect(tokenStatus({ revoked_at: "2026-09-02T00:00:00Z", expires_at: "2026-09-01T00:00:00Z" }, now)).toBe("revoked");
+  });
+  it("describes user and token events", () => {
+    const env = (k: string) => k;
+    const ev = (action: string, before: unknown, after: unknown): AuditEvent => ({ id: 1, occurred_at: "", actor: "mel", action, before, after });
+    expect(describeEvent(ev("user.created", null, { handle: "sam", role: "editor" }), env)).toBe("created the user as editor");
+    expect(describeEvent(ev("user.role_changed", { role: "editor" }, { role: "admin" }), env)).toBe("changed the role from editor to admin");
+    expect(describeEvent(ev("token.created", null, { id: 3, name: "laptop", prefix: "fs_1a2b3c4d" }), env)).toBe(
+      "created token “laptop” (fs_1a2b3c4d…)",
+    );
+    expect(describeEvent(ev("token.revoked", { id: 3, name: "laptop", prefix: "fs_1a2b3c4d" }, null), env)).toBe(
+      "revoked token “laptop” (fs_1a2b3c4d…)",
+    );
   });
 });

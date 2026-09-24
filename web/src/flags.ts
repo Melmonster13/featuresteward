@@ -2,6 +2,7 @@ import { ApiError, type Environment, type Flag } from "./api";
 import type { App } from "./main";
 import { atLeast, envState, flagHash, flagsHash, matchesSearch, validKey } from "./format";
 import { h } from "./dom";
+import { field, select } from "./ui";
 
 export async function flagListPage(app: App, params: URLSearchParams): Promise<Node[]> {
   const filters = { q: params.get("q") ?? "", env: params.get("env") ?? "", steward: params.get("steward") ?? "" };
@@ -184,14 +185,4 @@ export function newFlagPage(app: App): Node[] {
     h("div", { class: "actions" }, submit, h("a", { href: "#/flags" }, "Cancel")),
   );
   return [h("h1", { tabindex: "-1" }, "New flag"), form];
-}
-
-function field(id: string, label: string, control: HTMLElement): HTMLElement {
-  return h("div", { class: "field" }, h("label", { for: id }, label), control);
-}
-
-function select(id: string, options: [string, string][], value: string): HTMLSelectElement {
-  const el = h("select", { id }, ...options.map(([v, text]) => h("option", { value: v }, text)));
-  el.value = value;
-  return el;
 }

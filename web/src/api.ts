@@ -8,6 +8,32 @@ export interface User {
   name: string;
   role: Role;
   created_at: string;
+  disabled_at?: string;
+}
+
+// Token is an API token. The secret (token) is only in the response
+// that creates it.
+export interface Token {
+  id: number;
+  name: string;
+  prefix: string;
+  created_at: string;
+  expires_at?: string;
+  last_used_at?: string;
+  revoked_at?: string;
+  token?: string;
+}
+
+// SDKKey lets an app evaluate flags in one environment. The secret (key)
+// is only in the response that creates it.
+export interface SDKKey {
+  id: number;
+  environment: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  revoked_at?: string;
+  key?: string;
 }
 
 export interface Rule {
@@ -119,6 +145,78 @@ export class Api {
     return this.request("DELETE", flagPath(key));
   }
 
+  // --- Your own tokens ---
+
+  async myTokens(): Promise<Token[]> {
+    return (await this.request<{ tokens: Token[] }>("GET", "/api/v1/me/tokens")).tokens;
+  }
+
+  createMyToken(name: string, expiresAt?: string): Promise<Token> {
+    return this.request("POST", "/api/v1/me/tokens", { name, expires_at: expiresAt ?? null });
+  }
+
+  revokeMyToken(id: number): Promise<void> {
+    return this.request("DELETE", `/api/v1/me/tokens/${id}`);
+  }
+
+  // --- Admin ---
+
+  async users(): Promise<User[]> {
+    return (await this.request<{ users: User[] }>("GET", "/api/v1/users")).users;
+  }
+
+  user(handle: string): Promise<User> {
+    return this.request("GET", userPath(handle));
+  }
+
+  createUser(handle: string, name: string, role: Role): Promise<User> {
+    return this.request("POST", "/api/v1/users", { handle, name, role });
+  }
+
+  setRole(handle: string, role: Role): Promise<User> {
+    return this.request("PUT", `${userPath(handle)}/role`, { role });
+  }
+
+  disableUser(handle: string): Promise<void> {
+    return this.request("DELETE", userPath(handle));
+  }
+
+  async userAudit(handle: string): Promise<AuditEvent[]> {
+    return (await this.request<{ events: AuditEvent[] }>("GET", `${userPath(handle)}/audit`)).events;
+  }
+
+  async userTokens(handle: string): Promise<Token[]> {
+    return (await this.request<{ tokens: Token[] }>("GET", `${userPath(handle)}/tokens`)).tokens;
+  }
+
+  createUserToken(handle: string, name: string, expiresAt?: string): Promise<Token> {
+    return this.request("POST", `${userPath(handle)}/tokens`, { name, expires_at: expiresAt ?? null });
+  }
+
+  revokeUserToken(handle: string, id: number): Promise<void> {
+    return this.request("DELETE", `${userPath(handle)}/tokens/${id}`);
+  }
+
+  async sdkKeys(): Promise<SDKKey[]> {
+    return (await this.request<{ sdk_keys: SDKKey[] }>("GET", "/api/v1/sdk-keys")).sdk_keys;
+  }
+
+  createSDKKey(environment: string, name: string): Promise<SDKKey> {
+    return this.request("POST", "/api/v1/sdk-keys", { environment, name });
+  }
+
+  revokeSDKKey(id: number): Promise<void> {
+    return this.request("DELETE", `/api/v1/sdk-keys/${id}`);
+  }
+
+  createEnvironment(env: Environment): Promise<Environment> {
+    return this.request("POST", "/api/v1/environments", env);
+  }
+
+  updateEnvironment(key: string, name: string, isProtected: boolean): Promise<Environment> {
+    return this.request("PUT", `/api/v1/environments/${encodeURIComponent(key)}`, { name, protected: isProtected });
+  }
+
   // Every change carries a fresh Idempotency-Key, so a retried request
   // can't be applied twice.
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -135,6 +233,10 @@ export class Api {
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
+}
+
+function userPath(handle: string): string {
+  return `/api/v1/users/${encodeURIComponent(handle)}`;
 }
 
 function flagPath(key: string): string {

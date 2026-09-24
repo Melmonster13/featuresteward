@@ -1,7 +1,8 @@
 import { ApiError, type EnvConfig, type Environment, type Flag, type Rule } from "./api";
 import { h } from "./dom";
-import { atLeast, describeEvent, envState, lockReason, parseValues, sameConfig } from "./format";
+import { atLeast, envState, lockReason, parseValues, sameConfig } from "./format";
 import type { App } from "./main";
+import { formatTime, historyList } from "./ui";
 
 export async function flagPage(app: App, key: string): Promise<(Node | string)[]> {
   let flag: Flag;
@@ -17,22 +18,10 @@ export async function flagPage(app: App, key: string): Promise<(Node | string)[]
   const envName = (k: string) => envs.find((e) => e.key === k)?.name ?? k;
   const archived = Boolean(flag.archived_at);
 
-  const history = h("ol", { class: "history" });
+  const history = h("div");
   const refreshHistory = async () => {
     try {
-      const events = await app.api.audit(key);
-      history.replaceChildren(
-        ...events.reverse().map((e) =>
-          h(
-            "li",
-            {},
-            h("time", { datetime: e.occurred_at }, formatTime(e.occurred_at)),
-            " ",
-            h("strong", {}, `@${e.actor}`),
-            ` ${describeEvent(e, envName)}`,
-          ),
-        ),
-      );
+      history.replaceChildren(historyList(await app.api.audit(key), envName));
     } catch (err) {
       app.fail(err);
     }
@@ -323,10 +312,4 @@ function archiveForm(app: App, flag: Flag): HTMLElement {
     ),
     error,
   );
-}
-
-const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-
-function formatTime(iso: string): string {
-  return timeFormat.format(new Date(iso));
 }

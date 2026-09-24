@@ -487,3 +487,79 @@ button.danger {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+.bar {
+  flex-wrap: wrap;
+}
+
+.bar nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.bar nav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 4px 0;
+  border-bottom: 2px solid transparent;
+}
+
+.bar nav a[aria-current="page"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.secret {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.secret p {
+  margin: 0 0 8px;
+}
+
+.secret-row {
+  display: flex;
+  gap: 8px;
+}
+
+.secret-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.env-list {
+  display: grid;
+  gap: 8px;
+}
+
+.env-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.env-row > code {
+  min-width: 80px;
+  align-self: center;
+  font-weight: 600;
+}
+
+.env-row .status,
+.env-row .error {
+  flex-basis: 100%;
+}
+
+.inline-form .error {
+  flex-basis: 100%;
+}

@@ -1,9 +1,10 @@
 import "./style.css";
 import { Api, ApiError, type User } from "./api";
 import { h } from "./dom";
+import { environmentsPage, sdkKeysPage, tokensPage, userPage, usersPage } from "./admin";
 import { flagPage } from "./flag";
 import { newFlagPage, flagListPage } from "./flags";
-import { parseRoute } from "./format";
+import { atLeast, parseRoute, type Route } from "./format";
 
 // App is what every page gets: the API, who is signed in, and helpers.
 export interface App {
@@ -127,15 +128,9 @@ function signedIn(user: User): void {
     const notice = flashed;
     flashed = "";
     try {
-      const nodes =
-        r.page === "flags"
-          ? await flagListPage(app, r.params)
-          : r.page === "new-flag"
-            ? newFlagPage(app)
-            : r.page === "flag"
-              ? await flagPage(app, r.key)
-              : [h("h1", { tabindex: "-1" }, "Page not found"), h("p", {}, h("a", { href: "#/flags" }, "Go to flags"))];
+      const nodes = await page(app, r);
       if (id !== current) return; // a newer navigation won
+      markCurrent(nav, r.page);
       main.replaceChildren(h("p", { class: "flash", role: "status" }, notice), ...nodes);
       // Move focus to the new page's heading, so screen readers announce it.
       main.querySelector<HTMLElement>("h1")?.focus();
@@ -144,11 +139,29 @@ function signedIn(user: User): void {
     }
   };
 
+  const links: [string, string, Route["page"][]][] = [
+    ["#/flags", "Flags", ["flags", "new-flag", "flag"]],
+    ["#/tokens", "Your tokens", ["tokens"]],
+  ];
+  if (atLeast(user.role, "admin")) {
+    links.push(
+      ["#/admin/users", "Users", ["users", "user"]],
+      ["#/admin/sdk-keys", "SDK keys", ["sdk-keys"]],
+      ["#/admin/environments", "Environments", ["environments"]],
+    );
+  }
+  const nav = h(
+    "nav",
+    { "aria-label": "Main" },
+    ...links.map(([href, text, pages]) => h("a", { href, "data-pages": pages.join(" ") }, text)),
+  );
+
   show(
     h(
       "header",
       { class: "bar" },
       h("a", { class: "brand", href: "#/flags" }, "FeatureSteward"),
+      nav,
       h("span", { class: "who" }, `${user.handle} · ${user.role}`),
       signOut,
     ),
@@ -156,6 +169,37 @@ function signedIn(user: User): void {
   );
   window.onhashchange = route;
   route();
+}
+
+function page(app: App, r: Route): Promise<(Node | string)[]> | (Node | string)[] {
+  switch (r.page) {
+    case "flags":
+      return flagListPage(app, r.params);
+    case "new-flag":
+      return newFlagPage(app);
+    case "flag":
+      return flagPage(app, r.key);
+    case "tokens":
+      return tokensPage(app);
+    case "users":
+      return usersPage(app);
+    case "user":
+      return userPage(app, r.handle);
+    case "sdk-keys":
+      return sdkKeysPage(app);
+    case "environments":
+      return environmentsPage(app);
+    case "not-found":
+      return [h("h1", { tabindex: "-1" }, "Page not found"), h("p", {}, h("a", { href: "#/flags" }, "Go to flags"))];
+  }
+}
+
+// markCurrent tells screen readers and the styles which nav link is open.
+function markCurrent(nav: HTMLElement, current: Route["page"]): void {
+  for (const a of nav.querySelectorAll("a")) {
+    if (a.dataset.pages?.split(" ").includes(current)) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
 }
 
 start();
