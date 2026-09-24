@@ -13,6 +13,7 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/auth"
 	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/flag"
+	"github.com/Melmonster13/featuresteward/internal/idempotency"
 )
 
 const maxBodyBytes = 1 << 20
@@ -20,6 +21,7 @@ const maxBodyBytes = 1 << 20
 type server struct {
 	flags flag.Store
 	users auth.Store
+	idem  idempotency.Store
 	log   *slog.Logger
 }
 
@@ -28,12 +30,22 @@ type server struct {
 // POST /api/v1/evaluate only, an SDK key.
 //
 // Each route names the minimum role it needs. Roles are cumulative, and
-// every user is at least a viewer.
-func NewRouter(flags flag.Store, users auth.Store, log *slog.Logger) http.Handler {
-	s := &server{flags: flags, users: users, log: log}
+// every user is at least a viewer. State-changing routes accept an
+// Idempotency-Key header.
+func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *slog.Logger) http.Handler {
+	s := &server{flags: flags, users: users, idem: idem, log: log}
 
 	api := http.NewServeMux()
-	route := func(pattern string, min auth.Role, h http.HandlerFunc) { api.Handle(pattern, requireRole(min, h)) }
+	register := func(pattern string, min auth.Role, redact bool, h http.HandlerFunc) {
+		var handler http.Handler = h
+		if !strings.HasPrefix(pattern, "GET ") {
+			handler = s.idempotent(redact, h)
+		}
+		api.Handle(pattern, requireRole(min, handler))
+	}
+	route := func(pattern string, min auth.Role, h http.HandlerFunc) { register(pattern, min, false, h) }
+	// secretRoute is for routes whose response includes a new secret.
+	secretRoute := func(pattern string, min auth.Role, h http.HandlerFunc) { register(pattern, min, true, h) }
 	route("GET /api/v1/environments", auth.RoleViewer, s.listEnvironments)
 	route("GET /api/v1/flags", auth.RoleViewer, s.listFlags)
 	route("GET /api/v1/flags/{key}", auth.RoleViewer, s.getFlag)
@@ -50,7 +62,7 @@ func NewRouter(flags flag.Store, users auth.Store, log *slog.Logger) http.Handle
 	// Every user manages their own tokens.
 	route("GET /api/v1/me", auth.RoleViewer, s.getMe)
 	route("GET /api/v1/me/tokens", auth.RoleViewer, s.listMyTokens)
-	route("POST /api/v1/me/tokens", auth.RoleViewer, s.createMyToken)
+	secretRoute("POST /api/v1/me/tokens", auth.RoleViewer, s.createMyToken)
 	route("DELETE /api/v1/me/tokens/{id}", auth.RoleViewer, s.revokeMyToken)
 
 	route("GET /api/v1/users", auth.RoleAdmin, s.listUsers)
@@ -60,11 +72,11 @@ func NewRouter(flags flag.Store, users auth.Store, log *slog.Logger) http.Handle
 	route("DELETE /api/v1/users/{handle}", auth.RoleAdmin, s.disableUser)
 	route("GET /api/v1/users/{handle}/audit", auth.RoleAdmin, s.listUserAudit)
 	route("GET /api/v1/users/{handle}/tokens", auth.RoleAdmin, s.listUserTokens)
-	route("POST /api/v1/users/{handle}/tokens", auth.RoleAdmin, s.createUserToken)
+	secretRoute("POST /api/v1/users/{handle}/tokens", auth.RoleAdmin, s.createUserToken)
 	route("DELETE /api/v1/users/{handle}/tokens/{id}", auth.RoleAdmin, s.revokeUserToken)
 
 	route("GET /api/v1/sdk-keys", auth.RoleAdmin, s.listSDKKeys)
-	route("POST /api/v1/sdk-keys", auth.RoleAdmin, s.createSDKKey)
+	secretRoute("POST /api/v1/sdk-keys", auth.RoleAdmin, s.createSDKKey)
 	route("DELETE /api/v1/sdk-keys/{id}", auth.RoleAdmin, s.revokeSDKKey)
 
 	route("POST /api/v1/environments", auth.RoleAdmin, s.createEnvironment)

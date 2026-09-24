@@ -16,18 +16,24 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/audit"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
+	"github.com/Melmonster13/featuresteward/internal/idempotency"
 	"github.com/Melmonster13/featuresteward/internal/store/db"
 )
 
 type Postgres struct {
 	pool *pgxpool.Pool
 	q    *db.Queries
+
+	// Default to idempotency.TTL and idempotency.StaleAfter; tests shorten them.
+	IdempotencyTTL   time.Duration
+	IdempotencyStale time.Duration
 }
 
 var _ flag.Store = (*Postgres)(nil)
 
 func NewPostgres(pool *pgxpool.Pool) *Postgres {
-	return &Postgres{pool: pool, q: db.New(pool)}
+	return &Postgres{pool: pool, q: db.New(pool),
+		IdempotencyTTL: idempotency.TTL, IdempotencyStale: idempotency.StaleAfter}
 }
 
 func (s *Postgres) CreateFlag(ctx context.Context, actor, key, name, description string) (flag.Flag, error) {

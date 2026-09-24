@@ -138,6 +138,12 @@ curl -X POST http://localhost:8080/api/v1/evaluate \
 { "flag": "new-checkout", "enabled": true, "reason": "percentage_rollout" }
 ```
 
+### Safe retries
+
+Send an `Idempotency-Key` header (any unique string, up to 255 characters) with a `POST`, `PUT`, or `DELETE`. If the same user retries with the same key and the same request within 24 hours, the API returns the original response with `Idempotent-Replayed: true` instead of applying the change again. Reusing a key for a different request returns `422`.
+
+Responses that contain a new API token or SDK key are replayed without the secret, since secrets are never stored. Revoke the replayed `id` and create a new one if the first response was lost.
+
 ### How percentage rollouts work
 
 Each user is assigned a stable bucket from `hash(flag_key + user_id) % 100`. A flag at 25% is on for buckets 0–24. The same user always gets the same result, and raising the percentage only adds users; nobody who already has the feature loses it.

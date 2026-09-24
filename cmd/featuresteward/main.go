@@ -63,12 +63,27 @@ func run(log *slog.Logger) error {
 	db := store.NewPostgres(pool)
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           httpapi.NewRouter(db, db, log),
+		Handler:           httpapi.NewRouter(db, db, db, log),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := db.DeleteExpired(ctx); err != nil {
+					log.Error("delete expired idempotency keys", "err", err)
+				}
+			}
+		}
+	}()
 
 	errc := make(chan error, 1)
 	go func() {

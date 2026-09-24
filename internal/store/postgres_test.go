@@ -21,6 +21,8 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/auth/authtest"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/flag/flagtest"
+	"github.com/Melmonster13/featuresteward/internal/idempotency"
+	"github.com/Melmonster13/featuresteward/internal/idempotency/idemtest"
 )
 
 func TestPostgresFlagContract(t *testing.T) {
@@ -31,6 +33,15 @@ func TestPostgresFlagContract(t *testing.T) {
 func TestPostgresAuthContract(t *testing.T) {
 	newDB := dbFactory(t)
 	authtest.RunContract(t, func(t *testing.T) auth.Store { return newDB(t) })
+}
+
+func TestPostgresIdempotencyContract(t *testing.T) {
+	newDB := dbFactory(t)
+	idemtest.RunContract(t, func(t *testing.T, ttl, stale time.Duration) idempotency.Store {
+		s := newDB(t)
+		s.IdempotencyTTL, s.IdempotencyStale = ttl, stale
+		return s
+	})
 }
 
 // dbFactory returns a function giving each test its own database, cloned

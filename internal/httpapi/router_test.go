@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,19 +17,22 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/auth/authtest"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/flag/flagtest"
+	"github.com/Melmonster13/featuresteward/internal/idempotency/idemtest"
 )
 
 type client struct {
 	t     *testing.T
 	h     http.Handler
 	users *authtest.Memory
+	idem  *idemtest.Memory
 	token string // sent as the bearer credential
 }
 
 // newClient returns a client authenticated as admin "mel".
 func newClient(t *testing.T, flags flag.Store) *client {
-	users := authtest.NewMemory()
-	c := &client{t: t, users: users, h: NewRouter(flags, users, slog.New(slog.NewTextHandler(io.Discard, nil)))}
+	users, idem := authtest.NewMemory(), idemtest.NewMemory()
+	c := &client{t: t, users: users, idem: idem,
+		h: NewRouter(flags, users, idem, slog.New(slog.NewTextHandler(io.Discard, nil)))}
 	c.token = c.newUser("mel", auth.RoleAdmin)
 	return c
 }
@@ -582,4 +586,138 @@ func TestAdminBadRequests(t *testing.T) {
 	c.mustDo("POST", "/api/v1/me/tokens", `{"name":""}`, 400)
 	c.mustDo("POST", "/api/v1/me/tokens", `{"name":"x","expires_at":"next week"}`, 400)
 	c.mustDo("DELETE", "/api/v1/me/tokens/0", "", 404)
+}
+
+// doIdem sends a request with an Idempotency-Key and returns the raw response.
+func (c *client) doIdem(method, path, body, key string) *httptest.ResponseRecorder {
+	c.t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set(idempotencyHeader, key)
+	rec := httptest.NewRecorder()
+	c.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestIdempotentRetriesReplay(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	body := `{"key":"new-checkout","name":"New checkout"}`
+	first := c.doIdem("POST", "/api/v1/flags", body, "retry-1")
+	second := c.doIdem("POST", "/api/v1/flags", body, "retry-1")
+	if first.Code != 201 || second.Code != 201 {
+		t.Fatalf("codes = %d, %d", first.Code, second.Code)
+	}
+	if first.Body.String() != second.Body.String() || second.Header().Get("Location") != "/api/v1/flags/new-checkout" {
+		t.Errorf("replay differs:\n%s\n%s (Location %q)", first.Body, second.Body, second.Header().Get("Location"))
+	}
+	if first.Header().Get(replayedHeader) != "" || second.Header().Get(replayedHeader) != "true" {
+		t.Errorf("Idempotent-Replayed = %q, %q", first.Header().Get(replayedHeader), second.Header().Get(replayedHeader))
+	}
+	// Applied once.
+	events := c.mustDo("GET", "/api/v1/flags/new-checkout/audit", "", 200)["events"].([]any)
+	if len(events) != 1 {
+		t.Errorf("%d audit events, want 1", len(events))
+	}
+
+	// Without a key, a retry isn't deduplicated.
+	c.mustDo("POST", "/api/v1/flags", body, 409)
+
+	// Deletes replay too, instead of returning 404 the second time.
+	if a, b := c.doIdem("DELETE", "/api/v1/flags/new-checkout", "", "del-1"), c.doIdem("DELETE", "/api/v1/flags/new-checkout", "", "del-1"); a.Code != 204 || b.Code != 204 {
+		t.Errorf("delete codes = %d, %d", a.Code, b.Code)
+	}
+	// Client errors are replayed as well.
+	if a, b := c.doIdem("POST", "/api/v1/flags", `{"key":"Bad"}`, "bad-1"), c.doIdem("POST", "/api/v1/flags", `{"key":"Bad"}`, "bad-1"); a.Code != 400 || b.Code != 400 || b.Header().Get(replayedHeader) != "true" {
+		t.Errorf("bad request codes = %d, %d", a.Code, b.Code)
+	}
+}
+
+func TestIdempotencyKeyMisuse(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	c.doIdem("POST", "/api/v1/flags", `{"key":"a","name":"A"}`, "k")
+	if rec := c.doIdem("POST", "/api/v1/flags", `{"key":"b","name":"B"}`, "k"); rec.Code != 422 {
+		t.Errorf("different body: got %d", rec.Code)
+	}
+	if rec := c.doIdem("PUT", "/api/v1/flags/a", `{"key":"a","name":"A"}`, "k"); rec.Code != 422 {
+		t.Errorf("different route: got %d", rec.Code)
+	}
+	// Keys are per user.
+	sam := c.as(c.newUser("sam", auth.RoleEditor))
+	if rec := sam.doIdem("POST", "/api/v1/flags", `{"key":"b","name":"B"}`, "k"); rec.Code != 201 {
+		t.Errorf("other user, same key: got %d", rec.Code)
+	}
+	for _, bad := range []string{strings.Repeat("k", 256), "has space", "tab\t"} {
+		if rec := c.doIdem("POST", "/api/v1/flags", `{"key":"c","name":"C"}`, bad); rec.Code != 400 {
+			t.Errorf("key %q: got %d", bad, rec.Code)
+		}
+	}
+	// Denied requests don't consume keys.
+	viewer := c.as(c.newUser("vic", auth.RoleViewer))
+	if rec := viewer.doIdem("POST", "/api/v1/flags", `{"key":"e","name":"E"}`, "v"); rec.Code != 403 {
+		t.Fatalf("viewer: got %d", rec.Code)
+	}
+	if rec, _ := c.idem.Begin(context.Background(), "vic", "v", nil); rec != nil {
+		t.Errorf("denied request stored a record: %+v", rec)
+	}
+}
+
+func TestIdempotencyInProgress(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	body := `{"key":"d","name":"D"}`
+	// Reserve the key with this exact request's hash, as a concurrent first attempt would.
+	h := sha256.New()
+	io.WriteString(h, "POST /api/v1/flags\n")
+	h.Write([]byte(body))
+	c.idem.Begin(context.Background(), "mel", "busy", h.Sum(nil))
+	if rec := c.doIdem("POST", "/api/v1/flags", body, "busy"); rec.Code != 409 || !strings.Contains(rec.Body.String(), "in progress") {
+		t.Errorf("got %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestIdempotencyReleasesOnServerError(t *testing.T) {
+	c := newClient(t, failingCreate{flagtest.NewMemory()})
+	if rec := c.doIdem("POST", "/api/v1/flags", `{"key":"x","name":"X"}`, "k"); rec.Code != 500 {
+		t.Fatalf("got %d", rec.Code)
+	}
+	if rec, _ := c.idem.Begin(context.Background(), "mel", "k", nil); rec != nil {
+		t.Errorf("key still held after a 500: %+v", rec)
+	}
+}
+
+type failingCreate struct{ *flagtest.Memory }
+
+func (failingCreate) CreateFlag(context.Context, string, string, string, string) (flag.Flag, error) {
+	return flag.Flag{}, errors.New("database unavailable")
+}
+
+func TestIdempotencyNeverStoresSecrets(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	for _, rt := range []struct{ path, body, field string }{
+		{"/api/v1/me/tokens", `{"name":"cli"}`, "token"},
+		{"/api/v1/users/mel/tokens", `{"name":"cli2"}`, "token"},
+		{"/api/v1/sdk-keys", `{"environment":"prod","name":"svc"}`, "key"},
+	} {
+		first := c.doIdem("POST", rt.path, rt.body, "s-"+rt.path)
+		var a, b map[string]any
+		json.Unmarshal(first.Body.Bytes(), &a)
+		secret, _ := a[rt.field].(string)
+		if first.Code != 201 || secret == "" {
+			t.Fatalf("%s: %d %v", rt.path, first.Code, a)
+		}
+		second := c.doIdem("POST", rt.path, rt.body, "s-"+rt.path)
+		json.Unmarshal(second.Body.Bytes(), &b)
+		if second.Code != 201 || b["id"] != a["id"] || b[rt.field] != nil {
+			t.Errorf("%s replay = %d %v; want same id, no %s", rt.path, second.Code, b, rt.field)
+		}
+		if strings.Contains(second.Body.String(), secret) {
+			t.Errorf("%s: replay leaked the secret", rt.path)
+		}
+	}
+	// Exactly one token and one SDK key were created per route.
+	if toks := c.mustDo("GET", "/api/v1/me/tokens", "", 200)["tokens"].([]any); len(toks) != 3 {
+		t.Errorf("mel has %d tokens, want 3 (setup + 2)", len(toks))
+	}
+	if keys := c.mustDo("GET", "/api/v1/sdk-keys", "", 200)["sdk_keys"].([]any); len(keys) != 1 {
+		t.Errorf("%d SDK keys, want 1", len(keys))
+	}
 }

@@ -58,6 +58,16 @@ type FlagEnvironment struct {
 	UpdatedAt         pgtype.Timestamptz
 }
 
+type IdempotencyKey struct {
+	UserHandle  string
+	Key         string
+	RequestHash []byte
+	Status      *int32
+	Headers     []byte
+	Body        []byte
+	CreatedAt   pgtype.Timestamptz
+}
+
 type SdkKey struct {
 	ID          int64
 	Environment string
