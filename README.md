@@ -74,6 +74,7 @@ flowchart LR
 git clone https://github.com/Melmonster13/featuresteward.git
 cd featuresteward
 cp .env.example .env
+echo "API_KEY=$(openssl rand -hex 32)" >> .env
 docker compose up --build
 ```
 
@@ -158,6 +159,7 @@ Permissions are enforced on the server for every request, never only in the UI. 
 | `DATABASE_URL` | PostgreSQL connection string | — |
 | `REDIS_URL` | Redis connection string | — |
 | `PORT` | API port | `8080` |
+| `API_KEY` | Bearer token for the API (at least 32 characters) | — |
 | `CACHE_TTL_SECONDS` | Evaluation cache lifetime | `30` |
 | `RATE_LIMIT_PER_MIN` | Evaluation requests per client per minute | `600` |
 | `STALE_AFTER_DAYS` | Days a flag can sit unchanged at 0% or 100% before it's flagged stale | `30` |
