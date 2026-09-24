@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -92,7 +93,9 @@ func revokeOwnToken(e *env, cfg config) error {
 }
 
 func cmdWhoami(e *env, args []string) error {
-	if err := e.parse(e.flags("whoami"), args); err != nil {
+	fs := e.flags("whoami")
+	asJSON := fs.Bool("json", false, "print JSON")
+	if err := e.parse(fs, args); err != nil {
 		return err
 	}
 	c, cfg, err := e.client()
@@ -103,6 +106,9 @@ func cmdWhoami(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *asJSON {
+		return e.writeJSON(map[string]string{"handle": u.Handle, "name": u.Name, "role": u.Role, "url": cfg.URL})
+	}
 	fmt.Fprintf(e.stdout, "%s (%s) at %s\n", u.Handle, u.Role, cfg.URL)
 	return nil
 }
@@ -111,6 +117,7 @@ func cmdList(e *env, args []string) error {
 	fs := e.flags("list")
 	envName := fs.String("env", "", "show only this environment")
 	steward := fs.String("steward", "", "only flags with this steward, or none for unassigned")
+	asJSON := fs.Bool("json", false, "print JSON")
 	if err := e.parse(fs, args); err != nil {
 		return err
 	}
@@ -128,13 +135,24 @@ func cmdList(e *env, args []string) error {
 	}
 	if *envName != "" {
 		if !slices.Contains(keys, *envName) {
-			return fmt.Errorf("unknown environment %q (have: %s)", *envName, strings.Join(keys, ", "))
+			return notFound("unknown environment %q (have: %s)", *envName, strings.Join(keys, ", "))
 		}
 		keys = []string{*envName}
 	}
 	flags, err := c.ListFlags(e.ctx, *steward)
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		if *envName != "" {
+			for i := range flags {
+				flags[i].Environments = map[string]client.EnvConfig{*envName: flags[i].Environments[*envName]}
+			}
+		}
+		if flags == nil {
+			flags = []client.Flag{}
+		}
+		return e.writeJSON(map[string]any{"flags": flags})
 	}
 	if len(flags) == 0 {
 		fmt.Fprintln(e.stderr, "No flags.")
@@ -181,7 +199,9 @@ func stewardName(s *string) string {
 }
 
 func cmdStatus(e *env, args []string) error {
-	pos, err := e.parseArgs(e.flags("status"), args, "flag")
+	fs := e.flags("status")
+	asJSON := fs.Bool("json", false, "print JSON")
+	pos, err := e.parseArgs(fs, args, "flag")
 	if err != nil {
 		return err
 	}
@@ -191,7 +211,10 @@ func cmdStatus(e *env, args []string) error {
 	}
 	f, err := c.Flag(e.ctx, pos[0])
 	if err != nil {
-		return err
+		return flagErr(err, pos[0])
+	}
+	if *asJSON {
+		return e.writeJSON(f)
 	}
 	envs, err := c.ListEnvironments(e.ctx)
 	if err != nil {
@@ -249,6 +272,7 @@ func cmdCreate(e *env, args []string) error {
 	name := fs.String("name", "", "human-readable name (required)")
 	desc := fs.String("description", "", "what the flag is for")
 	steward := fs.String("steward", "", "steward handle (default: you)")
+	asJSON := fs.Bool("json", false, "print the new flag as JSON")
 	pos, err := e.parseArgs(fs, args, "flag")
 	if err != nil {
 		return err
@@ -262,16 +286,21 @@ func cmdCreate(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	f, err := c.CreateFlag(e.ctx, pos[0], *name, *desc, *steward)
+	f, err := c.CreateFlag(e.ctx, pos[0], *name, *desc, strings.TrimPrefix(*steward, "@"))
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		return e.writeJSON(f)
 	}
 	fmt.Fprintf(e.stdout, "Created %s (steward %s). It's off in every environment.\n", f.Key, stewardName(f.Steward))
 	return nil
 }
 
 func cmdToggle(e *env, args []string) error {
-	pos, err := e.parseArgs(e.flags("toggle"), args, "flag", "env", "on|off")
+	fs := e.flags("toggle")
+	asJSON := fs.Bool("json", false, "print the updated flag as JSON")
+	pos, err := e.parseArgs(fs, args, "flag", "env", "on|off")
 	if err != nil {
 		return err
 	}
@@ -284,11 +313,13 @@ func cmdToggle(e *env, args []string) error {
 		fmt.Fprintf(e.stderr, "stew toggle: expected on or off, got %q\n", pos[2])
 		return errUsage
 	}
-	return updateEnv(e, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.Enabled = on })
+	return updateEnv(e, *asJSON, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.Enabled = on })
 }
 
 func cmdRollout(e *env, args []string) error {
-	pos, err := e.parseArgs(e.flags("rollout"), args, "flag", "env", "percent")
+	fs := e.flags("rollout")
+	asJSON := fs.Bool("json", false, "print the updated flag as JSON")
+	pos, err := e.parseArgs(fs, args, "flag", "env", "percent")
 	if err != nil {
 		return err
 	}
@@ -297,23 +328,23 @@ func cmdRollout(e *env, args []string) error {
 		fmt.Fprintf(e.stderr, "stew rollout: percent must be a whole number 0-100, got %q\n", pos[2])
 		return errUsage
 	}
-	return updateEnv(e, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.RolloutPercentage = pct })
+	return updateEnv(e, *asJSON, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.RolloutPercentage = pct })
 }
 
 // updateEnv changes one field of a flag's environment config and keeps
 // the rest, since the API replaces the whole config.
-func updateEnv(e *env, key, envKey string, change func(*client.EnvConfig)) error {
+func updateEnv(e *env, asJSON bool, key, envKey string, change func(*client.EnvConfig)) error {
 	c, _, err := e.client()
 	if err != nil {
 		return err
 	}
 	f, err := c.Flag(e.ctx, key)
 	if err != nil {
-		return err
+		return flagErr(err, key)
 	}
 	cfg, ok := f.Environments[envKey]
 	if !ok {
-		return fmt.Errorf("unknown environment %q", envKey)
+		return notFound("unknown environment %q", envKey)
 	}
 	change(&cfg)
 	f, err = c.SetEnvironment(e.ctx, key, envKey, cfg)
@@ -321,7 +352,13 @@ func updateEnv(e *env, key, envKey string, change func(*client.EnvConfig)) error
 		return err
 	}
 	cfg = f.Environments[envKey]
-	fmt.Fprintf(e.stdout, "%s in %s: %s\n", key, envKey, state(cfg))
+	if asJSON {
+		if err := e.writeJSON(f); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(e.stdout, "%s in %s: %s\n", key, envKey, state(cfg))
+	}
 	if cfg.Enabled && cfg.RolloutPercentage == 0 && len(cfg.Rules) == 0 {
 		fmt.Fprintf(e.stderr, "note: the rollout is 0%%, so nobody gets it yet; run: stew rollout %s %s <percent>\n", key, envKey)
 	}
@@ -329,7 +366,9 @@ func updateEnv(e *env, key, envKey string, change func(*client.EnvConfig)) error
 }
 
 func cmdSteward(e *env, args []string) error {
-	pos, err := e.parseArgs(e.flags("steward"), args, "flag", "handle")
+	fs := e.flags("steward")
+	asJSON := fs.Bool("json", false, "print the updated flag as JSON")
+	pos, err := e.parseArgs(fs, args, "flag", "handle")
 	if err != nil {
 		return err
 	}
@@ -339,7 +378,10 @@ func cmdSteward(e *env, args []string) error {
 	}
 	f, err := c.SetSteward(e.ctx, pos[0], strings.TrimPrefix(pos[1], "@"))
 	if err != nil {
-		return err
+		return flagErr(err, pos[0])
+	}
+	if *asJSON {
+		return e.writeJSON(f)
 	}
 	fmt.Fprintf(e.stdout, "%s is now stewarded by %s\n", f.Key, stewardName(f.Steward))
 	return nil
@@ -361,8 +403,17 @@ func cmdArchive(e *env, args []string) error {
 		return err
 	}
 	if err := c.ArchiveFlag(e.ctx, pos[0]); err != nil {
-		return err
+		return flagErr(err, pos[0])
 	}
 	fmt.Fprintf(e.stdout, "Archived %s.\n", pos[0])
 	return nil
+}
+
+// flagErr names the flag when the API says it doesn't exist.
+func flagErr(err error, key string) error {
+	var ae *client.APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return notFound("flag %q not found", key)
+	}
+	return err
 }

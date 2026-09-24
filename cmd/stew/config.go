@@ -62,7 +62,7 @@ func loadConfig(getenv func(string) string, warn func(string)) (config, error) {
 		c.Insecure = true
 	}
 	if c.URL == "" || c.Token == "" {
-		return c, errors.New("not logged in: run `stew login --url <api-url>`, or set STEW_URL and STEW_TOKEN")
+		return c, &codedError{exitAuth, "not logged in: run `stew login --url <api-url>`, or set STEW_URL and STEW_TOKEN"}
 	}
 	return c, checkURL(c.URL, c.Insecure)
 }

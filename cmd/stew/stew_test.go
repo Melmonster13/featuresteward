@@ -15,6 +15,7 @@ import (
 
 	"github.com/Melmonster13/featuresteward/internal/auth"
 	"github.com/Melmonster13/featuresteward/internal/auth/authtest"
+	"github.com/Melmonster13/featuresteward/internal/client"
 	"github.com/Melmonster13/featuresteward/internal/flag/flagtest"
 	"github.com/Melmonster13/featuresteward/internal/httpapi"
 	"github.com/Melmonster13/featuresteward/internal/idempotency/idemtest"
@@ -107,7 +108,7 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	h := newHarness(t)
 	tok := h.token("mel", auth.RoleAdmin)
 
-	if code, _, errOut := h.stew("", "whoami"); code != 1 || !strings.Contains(errOut, "not logged in") {
+	if code, _, errOut := h.stew("", "whoami"); code != 3 || !strings.Contains(errOut, "not logged in") {
 		t.Errorf("whoami before login = %d %q", code, errOut)
 	}
 
@@ -164,7 +165,7 @@ func TestLoginRejects(t *testing.T) {
 	h.token("mel", auth.RoleAdmin)
 	path := filepath.Join(h.config, "stew", "config.json")
 
-	if code, _, errOut := h.stew("fs_wrong\n", "login", "--url", h.url); code != 1 || !strings.Contains(errOut, "checking token") {
+	if code, _, errOut := h.stew("fs_wrong\n", "login", "--url", h.url); code != 3 || !strings.Contains(errOut, "checking token") {
 		t.Errorf("bad token = %d %q", code, errOut)
 	}
 	if code, _, errOut := h.stew("\n", "login", "--url", h.url); code != 1 || !strings.Contains(errOut, "no token") {
@@ -233,7 +234,7 @@ new-checkout  on   25% +1 rule  off      @mel
 	if out := h.mustStew("", "list", "--steward", "sam"); strings.Contains(out, "new-checkout") || !strings.Contains(out, "dark-mode") {
 		t.Errorf("list --steward sam =\n%s", out)
 	}
-	if code, _, errOut := h.stew("", "list", "--env", "qa"); code != 1 || !strings.Contains(errOut, `unknown environment "qa"`) {
+	if code, _, errOut := h.stew("", "list", "--env", "qa"); code != 4 || !strings.Contains(errOut, `unknown environment "qa"`) {
 		t.Errorf("unknown env = %d %q", code, errOut)
 	}
 }
@@ -287,7 +288,7 @@ func TestFlagCommands(t *testing.T) {
 	if out := h.mustStew("", "status", "new-checkout"); !strings.Contains(out, "Archived: ") {
 		t.Errorf("status after archive:\n%s", out)
 	}
-	if code, _, errOut := h.stew("", "status", "nope"); code != 1 || !strings.Contains(errOut, "not found") {
+	if code, _, errOut := h.stew("", "status", "nope"); code != 4 || !strings.Contains(errOut, `flag "nope" not found`) {
 		t.Errorf("status of unknown flag = %d %q", code, errOut)
 	}
 }
@@ -300,14 +301,14 @@ func TestFlagCommandPermissions(t *testing.T) {
 	h.env["STEW_TOKEN"] = h.token("sam", auth.RoleEditor)
 
 	h.mustStew("", "toggle", "dark-mode", "dev", "on")
-	if code, _, errOut := h.stew("", "toggle", "dark-mode", "prod", "on"); code != 1 || !strings.Contains(errOut, "protected environment prod") {
+	if code, _, errOut := h.stew("", "toggle", "dark-mode", "prod", "on"); code != 3 || !strings.Contains(errOut, "protected environment prod") {
 		t.Errorf("editor toggling prod = %d %q", code, errOut)
 	}
-	if code, _, errOut := h.stew("", "steward", "dark-mode", "sam"); code != 1 || !strings.Contains(errOut, "current steward") {
+	if code, _, errOut := h.stew("", "steward", "dark-mode", "sam"); code != 3 || !strings.Contains(errOut, "current steward") {
 		t.Errorf("editor taking a flag = %d %q", code, errOut)
 	}
-	if code, _, _ := h.stew("", "archive", "dark-mode", "--yes"); code != 1 {
-		t.Errorf("editor archiving = %d, want 1", code)
+	if code, _, _ := h.stew("", "archive", "dark-mode", "--yes"); code != 3 {
+		t.Errorf("editor archiving = %d, want 3", code)
 	}
 }
 
@@ -325,6 +326,84 @@ func TestFlagCommandUsage(t *testing.T) {
 	} {
 		if code, _, _ := h.stew("", args...); code != 2 {
 			t.Errorf("stew %v = %d, want 2", args, code)
+		}
+	}
+}
+
+func TestJSONOutput(t *testing.T) {
+	h := newHarness(t)
+	tok := h.token("mel", auth.RoleAdmin)
+	h.token("sam", auth.RoleEditor)
+	h.mustStew(tok, "login", "--url", h.url)
+
+	decodeJSON := func(out string, v any) {
+		t.Helper()
+		if err := json.Unmarshal([]byte(out), v); err != nil {
+			t.Fatalf("not JSON: %v\n%s", err, out)
+		}
+	}
+
+	var me map[string]string
+	out := h.mustStew("", "whoami", "--json")
+	decodeJSON(out, &me)
+	if me["handle"] != "mel" || me["role"] != "admin" || me["url"] != h.url {
+		t.Errorf("whoami --json = %v", me)
+	}
+	if strings.Contains(out, tok) {
+		t.Error("whoami --json printed the token")
+	}
+
+	var list struct {
+		Flags []client.Flag `json:"flags"`
+	}
+	if out := h.mustStew("", "list", "--json"); strings.TrimSpace(out) != `{
+  "flags": []
+}` {
+		t.Errorf("empty list --json = %q", out)
+	}
+
+	var f client.Flag
+	decodeJSON(h.mustStew("", "create", "dark-mode", "--name", "Dark mode", "--steward", "@sam", "--json"), &f)
+	if f.Key != "dark-mode" || f.Steward == nil || *f.Steward != "sam" {
+		t.Errorf("create --json = %+v", f)
+	}
+	decodeJSON(h.mustStew("", "rollout", "dark-mode", "dev", "30", "--json"), &f)
+	decodeJSON(h.mustStew("", "toggle", "dark-mode", "dev", "on", "--json"), &f)
+	if dev := f.Environments["dev"]; !dev.Enabled || dev.RolloutPercentage != 30 {
+		t.Errorf("toggle --json dev = %+v", dev)
+	}
+	decodeJSON(h.mustStew("", "steward", "dark-mode", "mel", "--json"), &f)
+	if *f.Steward != "mel" {
+		t.Errorf("steward --json = %v", *f.Steward)
+	}
+	decodeJSON(h.mustStew("", "status", "dark-mode", "--json"), &f)
+	if f.Name != "Dark mode" || len(f.Environments) != 3 {
+		t.Errorf("status --json = %+v", f)
+	}
+
+	decodeJSON(h.mustStew("", "list", "--env", "dev", "--json"), &list)
+	if len(list.Flags) != 1 || len(list.Flags[0].Environments) != 1 || !list.Flags[0].Environments["dev"].Enabled {
+		t.Errorf("list --env dev --json = %+v", list)
+	}
+}
+
+func TestExitCodes(t *testing.T) {
+	h := newHarness(t)
+	h.env["STEW_URL"] = h.url
+	for _, c := range []struct {
+		token string
+		args  []string
+		want  int
+	}{
+		{"", []string{"status", "x"}, 3},                                             // not logged in
+		{"fs_wrong", []string{"status", "x"}, 3},                                     // bad token
+		{h.token("vic", auth.RoleViewer), []string{"create", "x", "--name", "X"}, 3}, // not allowed
+		{h.token("mel", auth.RoleAdmin), []string{"status", "x"}, 4},                 // no such flag
+		{h.env["STEW_TOKEN"], []string{"toggle", "x"}, 2},                            // usage
+	} {
+		h.env["STEW_TOKEN"] = c.token
+		if code, _, errOut := h.stew("", c.args...); code != c.want {
+			t.Errorf("stew %v = %d, want %d (%s)", c.args, code, c.want, errOut)
 		}
 	}
 }

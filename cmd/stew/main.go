@@ -4,10 +4,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 
@@ -32,6 +34,11 @@ Usage:
   stew steward <flag> <handle>              reassign the flag's steward
   stew archive <flag> --yes                 archive a flag (admins only)
 
+whoami, list, status, create, toggle, rollout, and steward take --json.
+
+Exit codes: 0 ok, 1 error, 2 bad usage, 3 not logged in or not allowed,
+4 flag or environment not found.
+
 Environment: STEW_URL and STEW_TOKEN override the saved login.
 `
 
@@ -52,13 +59,47 @@ type env struct {
 // errUsage means the command line was wrong; the message is already printed.
 var errUsage = errors.New("usage")
 
-// run executes a command and returns the exit code: 0 on success, 1 on
-// failure, 2 on bad usage.
+// Exit codes, so scripts can tell failures apart.
+const (
+	exitOK       = 0
+	exitError    = 1
+	exitUsage    = 2
+	exitAuth     = 3
+	exitNotFound = 4
+)
+
+// codedError is an error with a specific exit code.
+type codedError struct {
+	code int
+	msg  string
+}
+
+func (e *codedError) Error() string { return e.msg }
+
+func notFound(format string, args ...any) error {
+	return &codedError{exitNotFound, fmt.Sprintf(format, args...)}
+}
+
+func exitCode(err error) int {
+	var ce *codedError
+	var ae *client.APIError
+	switch {
+	case errors.As(err, &ce):
+		return ce.code
+	case errors.As(err, &ae) && (ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden):
+		return exitAuth
+	case errors.As(err, &ae) && ae.Status == http.StatusNotFound:
+		return exitNotFound
+	}
+	return exitError
+}
+
+// run executes a command and returns its exit code.
 func run(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
 	e := &env{ctx: ctx, getenv: getenv, stdin: stdin, stdout: stdout, stderr: stderr}
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprint(stdout, usage)
-		return 0
+		return exitOK
 	}
 	commands := map[string]func(*env, []string) error{
 		"login":   cmdLogin,
@@ -75,17 +116,17 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 	cmd, ok := commands[args[0]]
 	if !ok {
 		fmt.Fprintf(stderr, "stew: unknown command %q\n\n%s", args[0], usage)
-		return 2
+		return exitUsage
 	}
 	err := cmd(e, args[1:])
 	switch {
 	case err == nil:
-		return 0
+		return exitOK
 	case errors.Is(err, errUsage):
-		return 2
+		return exitUsage
 	default:
 		fmt.Fprintf(stderr, "stew %s: %v\n", args[0], err)
-		return 1
+		return exitCode(err)
 	}
 }
 
@@ -149,4 +190,11 @@ func (e *env) readSecret(prompt string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
+}
+
+// writeJSON prints v as indented JSON on stdout.
+func (e *env) writeJSON(v any) error {
+	enc := json.NewEncoder(e.stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
