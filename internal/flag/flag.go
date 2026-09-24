@@ -3,17 +3,19 @@ package flag
 
 import (
 	"context"
-	"errors"
 	"regexp"
 	"time"
 
+	"github.com/Melmonster13/featuresteward/internal/audit"
+	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 )
 
+// Aliases so callers can match flag errors without importing errs.
 var (
-	ErrNotFound = errors.New("not found")
-	ErrConflict = errors.New("already exists")
-	ErrInvalid  = errors.New("invalid")
+	ErrNotFound = errs.ErrNotFound
+	ErrConflict = errs.ErrConflict
+	ErrInvalid  = errs.ErrInvalid
 )
 
 var keyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -47,38 +49,27 @@ type Meta struct {
 
 func ValidateMeta(key, name string) error {
 	if !ValidKey(key) {
-		return errors.Join(ErrInvalid, errors.New("key must be lowercase letters, digits, and dashes"))
+		return errs.Invalid("key must be lowercase letters, digits, and dashes")
 	}
 	if name == "" {
-		return errors.Join(ErrInvalid, errors.New("name is required"))
+		return errs.Invalid("name is required")
 	}
 	return nil
 }
 
 func (c EnvConfig) Validate() error {
 	if c.RolloutPercentage < 0 || c.RolloutPercentage > 100 {
-		return errors.Join(ErrInvalid, errors.New("rollout_percentage must be 0-100"))
+		return errs.Invalid("rollout_percentage must be 0-100")
 	}
 	for _, r := range c.Rules {
 		if r.Attribute != eval.AttributeUserID && r.Attribute != eval.AttributeGroup {
-			return errors.Join(ErrInvalid, errors.New("rule attribute must be user_id or group"))
+			return errs.Invalid("rule attribute must be user_id or group")
 		}
 		if len(r.Values) == 0 {
-			return errors.Join(ErrInvalid, errors.New("rule values must not be empty"))
+			return errs.Invalid("rule values must not be empty")
 		}
 	}
 	return nil
-}
-
-type AuditEvent struct {
-	ID          int64
-	OccurredAt  time.Time
-	Actor       string
-	Action      string
-	FlagKey     string
-	Environment string
-	Before      []byte // JSON, nil when absent
-	After       []byte
 }
 
 const (
@@ -107,5 +98,5 @@ type Store interface {
 
 	ListEnvironments(ctx context.Context) ([]string, error)
 	// ListAuditEvents returns a flag's events, oldest first.
-	ListAuditEvents(ctx context.Context, flagKey string) ([]AuditEvent, error)
+	ListAuditEvents(ctx context.Context, flagKey string) ([]audit.Event, error)
 }

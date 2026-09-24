@@ -17,11 +17,33 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(log); err != nil {
+	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	var err error
+	if len(os.Args) > 1 && os.Args[1] == "create-admin" {
+		err = createAdmin(os.Args[2:])
+	} else {
+		err = run(log)
+	}
+	if err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+func connect(ctx context.Context) (*pgxpool.Pool, error) {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		return nil, errors.New("DATABASE_URL must be set")
+	}
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
 }
 
 func run(log *slog.Logger) error {
@@ -33,22 +55,15 @@ func run(log *slog.Logger) error {
 	if len(apiKey) < 32 {
 		return errors.New("API_KEY must be set to at least 32 characters")
 	}
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		return errors.New("DATABASE_URL must be set")
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := connect(ctx)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		return err
-	}
 
 	srv := &http.Server{
 		Addr:              ":" + port,

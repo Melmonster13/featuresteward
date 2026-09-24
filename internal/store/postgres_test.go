@@ -17,13 +17,25 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
+	"github.com/Melmonster13/featuresteward/internal/auth"
+	"github.com/Melmonster13/featuresteward/internal/auth/authtest"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/flag/flagtest"
 )
 
-// Each test gets its own database cloned from a migrated template, since
-// audit_events can't be truncated between tests.
-func TestPostgresContract(t *testing.T) {
+func TestPostgresFlagContract(t *testing.T) {
+	newDB := dbFactory(t)
+	flagtest.RunContract(t, func(t *testing.T) flag.Store { return newDB(t) })
+}
+
+func TestPostgresAuthContract(t *testing.T) {
+	newDB := dbFactory(t)
+	authtest.RunContract(t, func(t *testing.T) auth.Store { return newDB(t) })
+}
+
+// dbFactory returns a function giving each test its own database, cloned
+// from a migrated template, since audit_events can't be truncated.
+func dbFactory(t *testing.T) func(t *testing.T) *Postgres {
 	adminURL := os.Getenv("TEST_DATABASE_URL")
 	if adminURL == "" {
 		t.Fatal("TEST_DATABASE_URL is not set")
@@ -41,7 +53,7 @@ func TestPostgresContract(t *testing.T) {
 	migrate(t, withDB(t, adminURL, template))
 
 	var n atomic.Int64
-	flagtest.RunContract(t, func(t *testing.T) flag.Store {
+	return func(t *testing.T) *Postgres {
 		name := fmt.Sprintf("%s_%d", prefix, n.Add(1))
 		createDB(t, admin, name, template)
 		pool, err := pgxpool.New(ctx, withDB(t, adminURL, name))
@@ -50,7 +62,7 @@ func TestPostgresContract(t *testing.T) {
 		}
 		t.Cleanup(pool.Close)
 		return NewPostgres(pool)
-	})
+	}
 }
 
 func createDB(t *testing.T, admin *pgx.Conn, name, template string) {

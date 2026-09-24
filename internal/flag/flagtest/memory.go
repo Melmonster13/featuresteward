@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Melmonster13/featuresteward/internal/audit"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 )
@@ -19,7 +20,7 @@ type Memory struct {
 	mu     sync.Mutex
 	envs   []string
 	flags  map[string]*flag.Flag
-	events []flag.AuditEvent
+	events []audit.Event
 }
 
 var _ flag.Store = (*Memory)(nil)
@@ -140,10 +141,10 @@ func (m *Memory) ListEnvironments(context.Context) ([]string, error) {
 	return slices.Clone(m.envs), nil
 }
 
-func (m *Memory) ListAuditEvents(_ context.Context, flagKey string) ([]flag.AuditEvent, error) {
+func (m *Memory) ListAuditEvents(_ context.Context, flagKey string) ([]audit.Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := []flag.AuditEvent{}
+	out := []audit.Event{}
 	for _, e := range m.events {
 		if e.FlagKey == flagKey {
 			out = append(out, e)
@@ -164,7 +165,7 @@ func (m *Memory) active(key string) (*flag.Flag, error) {
 }
 
 func (m *Memory) audit(actor, action, key, env string, before, after any) {
-	m.events = append(m.events, flag.AuditEvent{
+	m.events = append(m.events, audit.Event{
 		ID: int64(len(m.events) + 1), OccurredAt: time.Now(), Actor: actor, Action: action,
 		FlagKey: key, Environment: env, Before: marshalOrNil(before), After: marshalOrNil(after),
 	})

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Melmonster13/featuresteward/internal/audit"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/store/db"
@@ -42,7 +43,7 @@ func (s *Postgres) CreateFlag(ctx context.Context, actor, key, name, description
 		if err := q.CreateFlagEnvironments(ctx, row.ID); err != nil {
 			return err
 		}
-		if err := audit(ctx, q, actor, flag.ActionCreated, key, "", nil, flag.Meta{Key: key, Name: name, Description: description}); err != nil {
+		if err := flagAudit(ctx, q, actor, flag.ActionCreated, key, "", nil, flag.Meta{Key: key, Name: name, Description: description}); err != nil {
 			return err
 		}
 		out, err = load(ctx, q, row)
@@ -99,7 +100,7 @@ func (s *Postgres) UpdateFlag(ctx context.Context, actor, key, name, description
 		if err != nil {
 			return err
 		}
-		if err := audit(ctx, q, actor, flag.ActionUpdated, key, "",
+		if err := flagAudit(ctx, q, actor, flag.ActionUpdated, key, "",
 			flag.Meta{Key: key, Name: before.Name, Description: before.Description},
 			flag.Meta{Key: key, Name: name, Description: description}); err != nil {
 			return err
@@ -147,7 +148,7 @@ func (s *Postgres) UpdateEnvironment(ctx context.Context, actor, key, env string
 		if err := q.TouchFlag(ctx, f.ID); err != nil {
 			return err
 		}
-		if err := audit(ctx, q, actor, flag.ActionEnvUpdated, key, env, before, cfg); err != nil {
+		if err := flagAudit(ctx, q, actor, flag.ActionEnvUpdated, key, env, before, cfg); err != nil {
 			return err
 		}
 		row, err := q.GetFlag(ctx, key)
@@ -169,7 +170,7 @@ func (s *Postgres) ArchiveFlag(ctx context.Context, actor, key string) error {
 		if err := q.ArchiveFlag(ctx, f.ID); err != nil {
 			return err
 		}
-		return audit(ctx, q, actor, flag.ActionArchived, key, "", nil, nil)
+		return flagAudit(ctx, q, actor, flag.ActionArchived, key, "", nil, nil)
 	})
 }
 
@@ -189,25 +190,12 @@ func (s *Postgres) ListEnvironments(ctx context.Context) ([]string, error) {
 	return s.q.ListEnvironments(ctx)
 }
 
-func (s *Postgres) ListAuditEvents(ctx context.Context, flagKey string) ([]flag.AuditEvent, error) {
+func (s *Postgres) ListAuditEvents(ctx context.Context, flagKey string) ([]audit.Event, error) {
 	rows, err := s.q.ListAuditEvents(ctx, &flagKey)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]flag.AuditEvent, len(rows))
-	for i, r := range rows {
-		out[i] = flag.AuditEvent{
-			ID:          r.ID,
-			OccurredAt:  r.OccurredAt.Time,
-			Actor:       r.Actor,
-			Action:      r.Action,
-			FlagKey:     deref(r.FlagKey),
-			Environment: deref(r.Environment),
-			Before:      r.Before,
-			After:       r.After,
-		}
-	}
-	return out, nil
+	return toAuditEvents(rows), nil
 }
 
 func (s *Postgres) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
@@ -228,7 +216,7 @@ func lockActive(ctx context.Context, q *db.Queries, key string) (db.Flag, error)
 	return f, nil
 }
 
-func audit(ctx context.Context, q *db.Queries, actor, action, key, env string, before, after any) error {
+func flagAudit(ctx context.Context, q *db.Queries, actor, action, key, env string, before, after any) error {
 	b, err := marshalOrNil(before)
 	if err != nil {
 		return err

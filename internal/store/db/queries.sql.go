@@ -170,7 +170,7 @@ func (q *Queries) InsertAuditEvent(ctx context.Context, arg InsertAuditEventPara
 }
 
 const listAuditEvents = `-- name: ListAuditEvents :many
-SELECT id, occurred_at, actor, action, flag_key, environment, before, after FROM audit_events WHERE flag_key = $1 ORDER BY id
+SELECT id, occurred_at, actor, action, flag_key, environment, before, after, subject_user FROM audit_events WHERE flag_key = $1 ORDER BY id
 `
 
 func (q *Queries) ListAuditEvents(ctx context.Context, flagKey *string) ([]AuditEvent, error) {
@@ -191,6 +191,7 @@ func (q *Queries) ListAuditEvents(ctx context.Context, flagKey *string) ([]Audit
 			&i.Environment,
 			&i.Before,
 			&i.After,
+			&i.SubjectUser,
 		); err != nil {
 			return nil, err
 		}

@@ -1,4 +1,4 @@
-.PHONY: run test test-int lint build up down migrate migrate-down generate
+.PHONY: run test test-int lint build up down migrate migrate-down admin generate
 
 DATABASE_URL ?= postgres://featuresteward:featuresteward@localhost:5432/featuresteward?sslmode=disable
 SQLC_IMAGE := sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537
@@ -30,6 +30,10 @@ down:
 
 migrate:
 	go tool goose -dir migrations postgres "$(DATABASE_URL)" up
+
+# Usage: make admin HANDLE=mel
+admin:
+	DATABASE_URL="$(DATABASE_URL)" go run ./cmd/featuresteward create-admin --handle "$(HANDLE)"
 
 migrate-down:
 	go tool goose -dir migrations postgres "$(DATABASE_URL)" down

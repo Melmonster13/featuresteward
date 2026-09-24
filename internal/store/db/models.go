@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ApiToken struct {
+	ID         int64
+	UserID     int64
+	Name       string
+	TokenHash  []byte
+	Prefix     string
+	CreatedAt  pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+}
+
 type AuditEvent struct {
 	ID          int64
 	OccurredAt  pgtype.Timestamptz
@@ -17,6 +29,7 @@ type AuditEvent struct {
 	Environment *string
 	Before      []byte
 	After       []byte
+	SubjectUser *string
 }
 
 type Environment struct {
@@ -42,4 +55,13 @@ type FlagEnvironment struct {
 	RolloutPercentage int16
 	Rules             []byte
 	UpdatedAt         pgtype.Timestamptz
+}
+
+type User struct {
+	ID         int64
+	Handle     string
+	Name       string
+	Role       string
+	CreatedAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
 }
