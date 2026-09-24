@@ -11,6 +11,21 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: featuresteward
+          POSTGRES_PASSWORD: featuresteward
+          POSTGRES_DB: featuresteward
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U featuresteward"
+          --health-interval 2s
+          --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgres://featuresteward:featuresteward@localhost:5432/featuresteward?sslmode=disable
     steps:
       - uses: actions/checkout@v7
         with:
@@ -19,7 +34,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go test ./...
+      - run: go test -tags integration ./...
+      - name: Check generated SQL code is up to date
+        run: docker run --rm -v "$PWD":/src:ro -w /src sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537 diff
       - run: go tool govulncheck ./...
       - run: docker build -t featuresteward .
 
