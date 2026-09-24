@@ -52,6 +52,8 @@ func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *
 	route("GET /api/v1/flags/{key}/audit", auth.RoleViewer, s.listAudit)
 	route("POST /api/v1/flags", auth.RoleEditor, s.createFlag)
 	route("PUT /api/v1/flags/{key}", auth.RoleEditor, s.updateFlag)
+	// Admins, or the flag's current steward (any role); see setSteward.
+	route("PUT /api/v1/flags/{key}/steward", auth.RoleViewer, s.setSteward)
 	// Protected environments additionally need an admin; see updateEnvironment.
 	route("PUT /api/v1/flags/{key}/environments/{env}", auth.RoleEditor, s.updateEnvironment)
 	// Archiving turns a flag off everywhere, including protected environments.

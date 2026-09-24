@@ -54,19 +54,25 @@ func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentPa
 }
 
 const createFlag = `-- name: CreateFlag :one
-INSERT INTO flags (key, name, description)
-VALUES ($1, $2, $3)
-RETURNING id, key, name, description, created_at, updated_at, archived_at
+INSERT INTO flags (key, name, description, steward)
+VALUES ($1, $2, $3, $4)
+RETURNING id, key, name, description, created_at, updated_at, archived_at, steward
 `
 
 type CreateFlagParams struct {
 	Key         string
 	Name        string
 	Description string
+	Steward     *string
 }
 
 func (q *Queries) CreateFlag(ctx context.Context, arg CreateFlagParams) (Flag, error) {
-	row := q.db.QueryRow(ctx, createFlag, arg.Key, arg.Name, arg.Description)
+	row := q.db.QueryRow(ctx, createFlag,
+		arg.Key,
+		arg.Name,
+		arg.Description,
+		arg.Steward,
+	)
 	var i Flag
 	err := row.Scan(
 		&i.ID,
@@ -76,6 +82,7 @@ func (q *Queries) CreateFlag(ctx context.Context, arg CreateFlagParams) (Flag, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ArchivedAt,
+		&i.Steward,
 	)
 	return i, err
 }
@@ -148,7 +155,7 @@ func (q *Queries) GetEvalConfig(ctx context.Context, arg GetEvalConfigParams) (G
 }
 
 const getFlag = `-- name: GetFlag :one
-SELECT id, key, name, description, created_at, updated_at, archived_at FROM flags WHERE key = $1
+SELECT id, key, name, description, created_at, updated_at, archived_at, steward FROM flags WHERE key = $1
 `
 
 func (q *Queries) GetFlag(ctx context.Context, key string) (Flag, error) {
@@ -162,6 +169,7 @@ func (q *Queries) GetFlag(ctx context.Context, key string) (Flag, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ArchivedAt,
+		&i.Steward,
 	)
 	return i, err
 }
@@ -192,7 +200,7 @@ func (q *Queries) GetFlagEnvironmentForUpdate(ctx context.Context, arg GetFlagEn
 }
 
 const getFlagForUpdate = `-- name: GetFlagForUpdate :one
-SELECT id, key, name, description, created_at, updated_at, archived_at FROM flags WHERE key = $1 FOR UPDATE
+SELECT id, key, name, description, created_at, updated_at, archived_at, steward FROM flags WHERE key = $1 FOR UPDATE
 `
 
 func (q *Queries) GetFlagForUpdate(ctx context.Context, key string) (Flag, error) {
@@ -206,6 +214,7 @@ func (q *Queries) GetFlagForUpdate(ctx context.Context, key string) (Flag, error
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ArchivedAt,
+		&i.Steward,
 	)
 	return i, err
 }
@@ -331,7 +340,7 @@ func (q *Queries) ListFlagEnvironments(ctx context.Context, flagIds []int64) ([]
 }
 
 const listFlags = `-- name: ListFlags :many
-SELECT id, key, name, description, created_at, updated_at, archived_at FROM flags WHERE archived_at IS NULL ORDER BY key
+SELECT id, key, name, description, created_at, updated_at, archived_at, steward FROM flags WHERE archived_at IS NULL ORDER BY key
 `
 
 func (q *Queries) ListFlags(ctx context.Context) ([]Flag, error) {
@@ -351,6 +360,7 @@ func (q *Queries) ListFlags(ctx context.Context) ([]Flag, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ArchivedAt,
+			&i.Steward,
 		); err != nil {
 			return nil, err
 		}
@@ -360,6 +370,33 @@ func (q *Queries) ListFlags(ctx context.Context) ([]Flag, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setSteward = `-- name: SetSteward :one
+UPDATE flags SET steward = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, key, name, description, created_at, updated_at, archived_at, steward
+`
+
+type SetStewardParams struct {
+	ID      int64
+	Steward *string
+}
+
+func (q *Queries) SetSteward(ctx context.Context, arg SetStewardParams) (Flag, error) {
+	row := q.db.QueryRow(ctx, setSteward, arg.ID, arg.Steward)
+	var i Flag
+	err := row.Scan(
+		&i.ID,
+		&i.Key,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.Steward,
+	)
+	return i, err
 }
 
 const touchFlag = `-- name: TouchFlag :exec
@@ -398,7 +435,7 @@ func (q *Queries) UpdateEnvironmentSettings(ctx context.Context, arg UpdateEnvir
 const updateFlag = `-- name: UpdateFlag :one
 UPDATE flags SET name = $2, description = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, key, name, description, created_at, updated_at, archived_at
+RETURNING id, key, name, description, created_at, updated_at, archived_at, steward
 `
 
 type UpdateFlagParams struct {
@@ -418,6 +455,7 @@ func (q *Queries) UpdateFlag(ctx context.Context, arg UpdateFlagParams) (Flag, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ArchivedAt,
+		&i.Steward,
 	)
 	return i, err
 }

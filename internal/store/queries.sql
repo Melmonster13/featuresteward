@@ -1,6 +1,6 @@
 -- name: CreateFlag :one
-INSERT INTO flags (key, name, description)
-VALUES ($1, $2, $3)
+INSERT INTO flags (key, name, description, steward)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: CreateFlagEnvironments :exec
@@ -26,6 +26,11 @@ FOR UPDATE;
 
 -- name: UpdateFlag :one
 UPDATE flags SET name = $2, description = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: SetSteward :one
+UPDATE flags SET steward = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
 

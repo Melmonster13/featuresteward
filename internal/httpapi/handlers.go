@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/Melmonster13/featuresteward/internal/auth"
+	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 )
@@ -14,6 +16,7 @@ type flagJSON struct {
 	Key          string                    `json:"key"`
 	Name         string                    `json:"name"`
 	Description  string                    `json:"description"`
+	Steward      *string                   `json:"steward"` // null when unassigned
 	CreatedAt    time.Time                 `json:"created_at"`
 	UpdatedAt    time.Time                 `json:"updated_at"`
 	ArchivedAt   *time.Time                `json:"archived_at,omitempty"`
@@ -22,7 +25,7 @@ type flagJSON struct {
 
 func toFlagJSON(f flag.Flag) flagJSON {
 	return flagJSON{
-		Key: f.Key, Name: f.Name, Description: f.Description,
+		Key: f.Key, Name: f.Name, Description: f.Description, Steward: flag.NewStewardSnapshot(f.Steward).Steward,
 		CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, ArchivedAt: f.ArchivedAt,
 		Environments: f.Environments,
 	}
@@ -47,17 +50,90 @@ func (s *server) listEnvironments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"environments": envs})
 }
 
+// listFlags accepts ?steward=<handle>, or ?steward=none for flags whose
+// steward is unset or disabled.
 func (s *server) listFlags(w http.ResponseWriter, r *http.Request) {
 	flags, err := s.flags.ListFlags(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	out := make([]flagJSON, len(flags))
-	for i, f := range flags {
-		out[i] = toFlagJSON(f)
+	match := func(flag.Flag) bool { return true }
+	switch steward := r.URL.Query().Get("steward"); steward {
+	case "":
+	case "none":
+		disabled, err := s.disabledHandles(r)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		match = func(f flag.Flag) bool { return f.Steward == "" || disabled[f.Steward] }
+	default:
+		match = func(f flag.Flag) bool { return f.Steward == steward }
+	}
+	out := []flagJSON{}
+	for _, f := range flags {
+		if match(f) {
+			out = append(out, toFlagJSON(f))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"flags": out})
+}
+
+func (s *server) disabledHandles(r *http.Request) (map[string]bool, error) {
+	users, err := s.users.ListUsers(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, u := range users {
+		if u.DisabledAt != nil {
+			out[u.Handle] = true
+		}
+	}
+	return out, nil
+}
+
+// checkSteward returns an error unless handle is an active editor or above.
+func (s *server) checkSteward(r *http.Request, handle string) error {
+	u, err := s.users.GetUser(r.Context(), handle)
+	if err == nil && u.DisabledAt == nil && u.Role.AtLeast(auth.RoleEditor) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, errs.ErrNotFound) {
+		return err
+	}
+	return errs.Invalid("steward must be an active user with the editor role or higher")
+}
+
+// setSteward lets an admin, or the flag's current steward, reassign it.
+func (s *server) setSteward(w http.ResponseWriter, r *http.Request) {
+	f, err := s.flags.GetFlag(r.Context(), r.PathValue("key"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	me := principalFrom(r).user
+	if !me.Role.AtLeast(auth.RoleAdmin) && (f.Steward == "" || f.Steward != me.Handle) {
+		writeError(w, http.StatusForbidden, "only an admin or the flag's current steward can reassign it")
+		return
+	}
+	var req struct {
+		Steward string `json:"steward"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := s.checkSteward(r, req.Steward); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	f, err = s.flags.SetSteward(r.Context(), actor(r), f.Key, req.Steward)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toFlagJSON(f))
 }
 
 func (s *server) createFlag(w http.ResponseWriter, r *http.Request) {
@@ -65,11 +141,18 @@ func (s *server) createFlag(w http.ResponseWriter, r *http.Request) {
 		Key         string `json:"key"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		Steward     string `json:"steward"` // defaults to the creator
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	f, err := s.flags.CreateFlag(r.Context(), actor(r), req.Key, req.Name, req.Description)
+	if req.Steward == "" {
+		req.Steward = actor(r)
+	} else if err := s.checkSteward(r, req.Steward); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	f, err := s.flags.CreateFlag(r.Context(), actor(r), req.Key, req.Name, req.Description, req.Steward)
 	if err != nil {
 		s.fail(w, r, err)
 		return

@@ -38,15 +38,15 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 	t.Run("create rejects duplicates and invalid input", func(t *testing.T) {
 		s := newStore(t)
 		mustCreate(t, s, "new-checkout")
-		if _, err := s.CreateFlag(ctx, "mel", "new-checkout", "Again", ""); !errors.Is(err, flag.ErrConflict) {
+		if _, err := s.CreateFlag(ctx, "mel", "new-checkout", "Again", "", ""); !errors.Is(err, flag.ErrConflict) {
 			t.Errorf("duplicate: got %v, want ErrConflict", err)
 		}
 		for _, key := range []string{"", "Bad Key", "-leading-dash", "under_score"} {
-			if _, err := s.CreateFlag(ctx, "mel", key, "Name", ""); !errors.Is(err, flag.ErrInvalid) {
+			if _, err := s.CreateFlag(ctx, "mel", key, "Name", "", ""); !errors.Is(err, flag.ErrInvalid) {
 				t.Errorf("key %q: got %v, want ErrInvalid", key, err)
 			}
 		}
-		if _, err := s.CreateFlag(ctx, "mel", "no-name", "", ""); !errors.Is(err, flag.ErrInvalid) {
+		if _, err := s.CreateFlag(ctx, "mel", "no-name", "", "", ""); !errors.Is(err, flag.ErrInvalid) {
 			t.Errorf("empty name: got %v, want ErrInvalid", err)
 		}
 	})
@@ -185,7 +185,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		if _, err := s.EvalConfig(ctx, "old", "dev"); !errors.Is(err, flag.ErrNotFound) {
 			t.Errorf("eval archived: got %v", err)
 		}
-		if _, err := s.CreateFlag(ctx, "mel", "old", "Reuse", ""); !errors.Is(err, flag.ErrConflict) {
+		if _, err := s.CreateFlag(ctx, "mel", "old", "Reuse", "", ""); !errors.Is(err, flag.ErrConflict) {
 			t.Errorf("reuse archived key: got %v, want ErrConflict", err)
 		}
 	})
@@ -227,6 +227,64 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		}
 		if _, err := s.GetEnvironment(ctx, "qa"); !errors.Is(err, flag.ErrNotFound) {
 			t.Errorf("unknown env: got %v", err)
+		}
+	})
+
+	t.Run("stewards", func(t *testing.T) {
+		s := newStore(t)
+		f, err := s.CreateFlag(ctx, "mel", "owned", "Owned", "", "mel")
+		if err != nil || f.Steward != "mel" {
+			t.Fatalf("create with steward = %+v, %v", f, err)
+		}
+		if f := mustCreate(t, s, "orphan"); f.Steward != "" {
+			t.Errorf("create without steward = %q", f.Steward)
+		}
+		f, err = s.SetSteward(ctx, "mel", "owned", "sam")
+		if err != nil || f.Steward != "sam" {
+			t.Fatalf("SetSteward = %+v, %v", f, err)
+		}
+		if got, _ := s.GetFlag(ctx, "owned"); got.Steward != "sam" {
+			t.Errorf("GetFlag steward = %q", got.Steward)
+		}
+		// Renames keep the steward.
+		if f, _ := s.UpdateFlag(ctx, "sam", "owned", "Renamed", ""); f.Steward != "sam" {
+			t.Errorf("after rename steward = %q", f.Steward)
+		}
+		flags, _ := s.ListFlags(ctx)
+		if len(flags) != 2 || flags[0].Steward != "" || flags[1].Steward != "sam" {
+			t.Errorf("ListFlags stewards = %+v", flags)
+		}
+		if _, err := s.SetSteward(ctx, "mel", "owned", ""); !errors.Is(err, flag.ErrInvalid) {
+			t.Errorf("empty steward: got %v", err)
+		}
+		if _, err := s.SetSteward(ctx, "mel", "nope", "sam"); !errors.Is(err, flag.ErrNotFound) {
+			t.Errorf("missing flag: got %v", err)
+		}
+		s.ArchiveFlag(ctx, "mel", "orphan")
+		if _, err := s.SetSteward(ctx, "mel", "orphan", "sam"); !errors.Is(err, flag.ErrNotFound) {
+			t.Errorf("archived flag: got %v", err)
+		}
+
+		events, _ := s.ListAuditEvents(ctx, "owned")
+		var got []any
+		for _, e := range events {
+			if e.Action == flag.ActionSteward {
+				got = append(got, decode(t, e.Before), decode(t, e.After))
+			}
+		}
+		want := []any{map[string]any{"steward": "mel"}, map[string]any{"steward": "sam"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("steward events = %v, want %v", got, want)
+		}
+		if a := decode(t, events[0].After).(map[string]any); a["steward"] != "mel" {
+			t.Errorf("create event = %v", a)
+		}
+		// Assigning an unassigned flag records a null "before".
+		mustCreate(t, s, "fresh")
+		s.SetSteward(ctx, "mel", "fresh", "ana")
+		ev, _ := s.ListAuditEvents(ctx, "fresh")
+		if b := decode(t, ev[1].Before); !reflect.DeepEqual(b, map[string]any{"steward": nil}) {
+			t.Errorf("before = %v, want steward null", b)
 		}
 	})
 
@@ -378,7 +436,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 
 func mustCreate(t *testing.T, s flag.Store, key string) flag.Flag {
 	t.Helper()
-	f, err := s.CreateFlag(context.Background(), "mel", key, "New checkout", "desc")
+	f, err := s.CreateFlag(context.Background(), "mel", key, "New checkout", "desc", "")
 	if err != nil {
 		t.Fatalf("CreateFlag(%q): %v", key, err)
 	}

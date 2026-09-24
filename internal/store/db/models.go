@@ -47,6 +47,7 @@ type Flag struct {
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	ArchivedAt  pgtype.Timestamptz
+	Steward     *string
 }
 
 type FlagEnvironment struct {

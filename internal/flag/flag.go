@@ -23,9 +23,11 @@ var keyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 func ValidKey(key string) bool { return len(key) <= 100 && keyPattern.MatchString(key) }
 
 type Flag struct {
-	Key          string
-	Name         string
-	Description  string
+	Key         string
+	Name        string
+	Description string
+	// Steward is the accountable user's handle; "" means unassigned.
+	Steward      string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	ArchivedAt   *time.Time
@@ -53,6 +55,19 @@ type Meta struct {
 	Key         string `json:"key"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Steward     string `json:"steward,omitempty"`
+}
+
+// StewardSnapshot is the audit snapshot for a steward change.
+type StewardSnapshot struct {
+	Steward *string `json:"steward"` // null when unassigned
+}
+
+func NewStewardSnapshot(handle string) StewardSnapshot {
+	if handle == "" {
+		return StewardSnapshot{}
+	}
+	return StewardSnapshot{Steward: &handle}
 }
 
 func (e Environment) Validate() error {
@@ -97,6 +112,7 @@ const (
 	ActionUpdated    = "flag.updated"
 	ActionEnvUpdated = "flag.environment_updated"
 	ActionArchived   = "flag.archived"
+	ActionSteward    = "flag.steward_changed"
 
 	ActionEnvironmentCreated = "environment.created"
 	ActionEnvironmentUpdated = "environment.updated"
@@ -109,11 +125,14 @@ const (
 // ListFlags and EvalConfig, and cannot be modified.
 type Store interface {
 	// CreateFlag creates the flag, disabled, in every environment.
-	CreateFlag(ctx context.Context, actor, key, name, description string) (Flag, error)
+	// steward may be "" for none; callers validate the handle.
+	CreateFlag(ctx context.Context, actor, key, name, description, steward string) (Flag, error)
 	GetFlag(ctx context.Context, key string) (Flag, error)
 	ListFlags(ctx context.Context) ([]Flag, error)
 	UpdateFlag(ctx context.Context, actor, key, name, description string) (Flag, error)
 	UpdateEnvironment(ctx context.Context, actor, key, env string, cfg EnvConfig) (Flag, error)
+	// SetSteward assigns a non-empty steward; callers validate the handle.
+	SetSteward(ctx context.Context, actor, key, steward string) (Flag, error)
 	ArchiveFlag(ctx context.Context, actor, key string) error
 
 	// EvalConfig returns what eval.Evaluate needs for one flag in one environment.

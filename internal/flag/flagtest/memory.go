@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Melmonster13/featuresteward/internal/audit"
+	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 )
@@ -35,7 +36,7 @@ func NewMemory() *Memory {
 	}, flags: map[string]*flag.Flag{}}
 }
 
-func (m *Memory) CreateFlag(_ context.Context, actor, key, name, description string) (flag.Flag, error) {
+func (m *Memory) CreateFlag(_ context.Context, actor, key, name, description, steward string) (flag.Flag, error) {
 	if err := flag.ValidateMeta(key, name); err != nil {
 		return flag.Flag{}, err
 	}
@@ -45,13 +46,13 @@ func (m *Memory) CreateFlag(_ context.Context, actor, key, name, description str
 		return flag.Flag{}, flag.ErrConflict
 	}
 	now := time.Now()
-	f := &flag.Flag{Key: key, Name: name, Description: description, CreatedAt: now, UpdatedAt: now,
+	f := &flag.Flag{Key: key, Name: name, Description: description, Steward: steward, CreatedAt: now, UpdatedAt: now,
 		Environments: map[string]flag.EnvConfig{}}
 	for _, e := range m.envs {
 		f.Environments[e.Key] = flag.EnvConfig{RolloutPercentage: 100, Rules: []eval.Rule{}}
 	}
 	m.flags[key] = f
-	m.audit(actor, flag.ActionCreated, key, "", nil, flag.Meta{Key: key, Name: name, Description: description})
+	m.audit(actor, flag.ActionCreated, key, "", nil, flag.Meta{Key: key, Name: name, Description: description, Steward: steward})
 	return clone(f), nil
 }
 
@@ -88,9 +89,9 @@ func (m *Memory) UpdateFlag(_ context.Context, actor, key, name, description str
 	if err != nil {
 		return flag.Flag{}, err
 	}
-	before := flag.Meta{Key: key, Name: f.Name, Description: f.Description}
+	before := flag.Meta{Key: key, Name: f.Name, Description: f.Description, Steward: f.Steward}
 	f.Name, f.Description, f.UpdatedAt = name, description, time.Now()
-	m.audit(actor, flag.ActionUpdated, key, "", before, flag.Meta{Key: key, Name: name, Description: description})
+	m.audit(actor, flag.ActionUpdated, key, "", before, flag.Meta{Key: key, Name: name, Description: description, Steward: f.Steward})
 	return clone(f), nil
 }
 
@@ -112,6 +113,22 @@ func (m *Memory) UpdateEnvironment(_ context.Context, actor, key, env string, cf
 	f.Environments[env] = cfg
 	f.UpdatedAt = time.Now()
 	m.audit(actor, flag.ActionEnvUpdated, key, env, before, cfg)
+	return clone(f), nil
+}
+
+func (m *Memory) SetSteward(_ context.Context, actor, key, steward string) (flag.Flag, error) {
+	if steward == "" {
+		return flag.Flag{}, errs.Invalid("steward is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, err := m.active(key)
+	if err != nil {
+		return flag.Flag{}, err
+	}
+	before := f.Steward
+	f.Steward, f.UpdatedAt = steward, time.Now()
+	m.audit(actor, flag.ActionSteward, key, "", flag.NewStewardSnapshot(before), flag.NewStewardSnapshot(steward))
 	return clone(f), nil
 }
 

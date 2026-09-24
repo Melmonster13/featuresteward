@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Melmonster13/featuresteward/internal/audit"
+	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/idempotency"
@@ -36,20 +37,21 @@ func NewPostgres(pool *pgxpool.Pool) *Postgres {
 		IdempotencyTTL: idempotency.TTL, IdempotencyStale: idempotency.StaleAfter}
 }
 
-func (s *Postgres) CreateFlag(ctx context.Context, actor, key, name, description string) (flag.Flag, error) {
+func (s *Postgres) CreateFlag(ctx context.Context, actor, key, name, description, steward string) (flag.Flag, error) {
 	if err := flag.ValidateMeta(key, name); err != nil {
 		return flag.Flag{}, err
 	}
 	var out flag.Flag
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		row, err := q.CreateFlag(ctx, db.CreateFlagParams{Key: key, Name: name, Description: description})
+		row, err := q.CreateFlag(ctx, db.CreateFlagParams{Key: key, Name: name, Description: description, Steward: strPtr(steward)})
 		if err != nil {
 			return err
 		}
 		if err := q.CreateFlagEnvironments(ctx, row.ID); err != nil {
 			return err
 		}
-		if err := flagAudit(ctx, q, actor, flag.ActionCreated, key, "", nil, flag.Meta{Key: key, Name: name, Description: description}); err != nil {
+		if err := flagAudit(ctx, q, actor, flag.ActionCreated, key, "", nil,
+			flag.Meta{Key: key, Name: name, Description: description, Steward: steward}); err != nil {
 			return err
 		}
 		out, err = load(ctx, q, row)
@@ -106,9 +108,10 @@ func (s *Postgres) UpdateFlag(ctx context.Context, actor, key, name, description
 		if err != nil {
 			return err
 		}
+		steward := deref(before.Steward)
 		if err := flagAudit(ctx, q, actor, flag.ActionUpdated, key, "",
-			flag.Meta{Key: key, Name: before.Name, Description: before.Description},
-			flag.Meta{Key: key, Name: name, Description: description}); err != nil {
+			flag.Meta{Key: key, Name: before.Name, Description: before.Description, Steward: steward},
+			flag.Meta{Key: key, Name: name, Description: description, Steward: steward}); err != nil {
 			return err
 		}
 		out, err = load(ctx, q, row)
@@ -159,6 +162,30 @@ func (s *Postgres) UpdateEnvironment(ctx context.Context, actor, key, env string
 		}
 		row, err := q.GetFlag(ctx, key)
 		if err != nil {
+			return err
+		}
+		out, err = load(ctx, q, row)
+		return err
+	})
+	return out, err
+}
+
+func (s *Postgres) SetSteward(ctx context.Context, actor, key, steward string) (flag.Flag, error) {
+	if steward == "" {
+		return flag.Flag{}, errs.Invalid("steward is required")
+	}
+	var out flag.Flag
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		before, err := lockActive(ctx, q, key)
+		if err != nil {
+			return err
+		}
+		row, err := q.SetSteward(ctx, db.SetStewardParams{ID: before.ID, Steward: &steward})
+		if err != nil {
+			return err
+		}
+		if err := flagAudit(ctx, q, actor, flag.ActionSteward, key, "",
+			flag.NewStewardSnapshot(deref(before.Steward)), flag.NewStewardSnapshot(steward)); err != nil {
 			return err
 		}
 		out, err = load(ctx, q, row)
@@ -319,6 +346,7 @@ func toFlag(row db.Flag, envs []db.FlagEnvironment) (flag.Flag, error) {
 		Key:          row.Key,
 		Name:         row.Name,
 		Description:  row.Description,
+		Steward:      deref(row.Steward),
 		CreatedAt:    row.CreatedAt.Time,
 		UpdatedAt:    row.UpdatedAt.Time,
 		ArchivedAt:   timePtr(row.ArchivedAt),
@@ -368,6 +396,13 @@ func timePtr(t pgtype.Timestamptz) *time.Time {
 		return nil
 	}
 	return &t.Time
+}
+
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func deref(s *string) string {

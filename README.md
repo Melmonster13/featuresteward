@@ -152,7 +152,7 @@ Each user is assigned a stable bucket from `hash(flag_key + user_id) % 100`. A f
 
 ## Stewards and roles
 
-**Steward:** Every flag has one. The steward is the point of contact for that flag, reviews production change requests for it, and is notified when it goes stale. Stewardship is per flag, not a permission level.
+**Steward:** Every flag has one. The steward is the point of contact for that flag, reviews production change requests for it, and is notified when it goes stale. Stewardship is per flag, not a permission level. A new flag's steward is its creator unless another is named; stewards must be active editors or above. Admins can reassign any flag, and a steward can hand their own flag to someone else. `GET /api/v1/flags?steward=none` lists flags with no steward or a disabled one.
 
 **Roles** control what each user can do across the system:
 

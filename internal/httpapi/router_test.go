@@ -359,6 +359,8 @@ func TestRolePermissions(t *testing.T) {
 
 		{"PUT", "/api/v1/flags/new-checkout/environments/prod", `{"enabled":true,"rollout_percentage":50}`, auth.RoleAdmin, 200},
 		{"DELETE", "/api/v1/flags/new-checkout", "", auth.RoleAdmin, 204},
+		// new-checkout's steward is mel, so only admins can reassign it here.
+		{"PUT", "/api/v1/flags/new-checkout/steward", `{"steward":"sam"}`, auth.RoleAdmin, 200},
 		{"GET", "/api/v1/users", "", auth.RoleAdmin, 200},
 		{"POST", "/api/v1/users", `{"handle":"new","role":"viewer"}`, auth.RoleAdmin, 201},
 		{"GET", "/api/v1/users/sam", "", auth.RoleAdmin, 200},
@@ -686,7 +688,7 @@ func TestIdempotencyReleasesOnServerError(t *testing.T) {
 
 type failingCreate struct{ *flagtest.Memory }
 
-func (failingCreate) CreateFlag(context.Context, string, string, string, string) (flag.Flag, error) {
+func (failingCreate) CreateFlag(context.Context, string, string, string, string, string) (flag.Flag, error) {
 	return flag.Flag{}, errors.New("database unavailable")
 }
 
@@ -719,5 +721,58 @@ func TestIdempotencyNeverStoresSecrets(t *testing.T) {
 	}
 	if keys := c.mustDo("GET", "/api/v1/sdk-keys", "", 200)["sdk_keys"].([]any); len(keys) != 1 {
 		t.Errorf("%d SDK keys, want 1", len(keys))
+	}
+}
+
+func TestStewards(t *testing.T) {
+	c := newClient(t, flagtest.NewMemory())
+	sam := c.as(c.newUser("sam", auth.RoleEditor))
+	c.newUser("ana", auth.RoleApprover)
+	c.newUser("vic", auth.RoleViewer)
+	c.newUser("gone", auth.RoleEditor)
+	c.users.DisableUser(context.Background(), "mel", "gone")
+
+	// The creator is the default steward; admins can name someone else.
+	if f := sam.mustDo("POST", "/api/v1/flags", `{"key":"a","name":"A"}`, 201); f["steward"] != "sam" {
+		t.Errorf("default steward = %v", f["steward"])
+	}
+	if f := c.mustDo("POST", "/api/v1/flags", `{"key":"b","name":"B","steward":"ana"}`, 201); f["steward"] != "ana" {
+		t.Errorf("explicit steward = %v", f["steward"])
+	}
+	for _, bad := range []string{"vic", "gone", "nobody"} {
+		c.mustDo("POST", "/api/v1/flags", `{"key":"c","name":"C","steward":"`+bad+`"}`, 400)
+		c.mustDo("PUT", "/api/v1/flags/b/steward", `{"steward":"`+bad+`"}`, 400)
+	}
+	c.mustDo("PUT", "/api/v1/flags/b/steward", `{"steward":""}`, 400)
+
+	// The current steward can hand off, then can't take it back.
+	sam.mustDo("PUT", "/api/v1/flags/b/steward", `{"steward":"sam"}`, 403)
+	if f := sam.mustDo("PUT", "/api/v1/flags/a/steward", `{"steward":"ana"}`, 200); f["steward"] != "ana" {
+		t.Errorf("after handoff = %v", f["steward"])
+	}
+	sam.mustDo("PUT", "/api/v1/flags/a/steward", `{"steward":"sam"}`, 403)
+	c.mustDo("PUT", "/api/v1/flags/nope/steward", `{"steward":"sam"}`, 404)
+
+	events := c.mustDo("GET", "/api/v1/flags/a/audit", "", 200)["events"].([]any)
+	last := events[len(events)-1].(map[string]any)
+	if last["action"] != "flag.steward_changed" || last["actor"] != "sam" ||
+		last["before"].(map[string]any)["steward"] != "sam" || last["after"].(map[string]any)["steward"] != "ana" {
+		t.Errorf("steward audit event = %v", last)
+	}
+
+	// Filters: by handle, and "none" for unassigned or disabled stewards.
+	c.mustDo("POST", "/api/v1/flags", `{"key":"d","name":"D","steward":"sam"}`, 201)
+	c.users.DisableUser(context.Background(), "mel", "sam")
+	keys := func(q string) string {
+		var out []string
+		for _, f := range c.mustDo("GET", "/api/v1/flags"+q, "", 200)["flags"].([]any) {
+			out = append(out, f.(map[string]any)["key"].(string))
+		}
+		return strings.Join(out, ",")
+	}
+	for q, want := range map[string]string{"": "a,b,d", "?steward=ana": "a,b", "?steward=sam": "d", "?steward=none": "d", "?steward=zed": ""} {
+		if got := keys(q); got != want {
+			t.Errorf("GET /flags%s = %q, want %q", q, got, want)
+		}
 	}
 }
