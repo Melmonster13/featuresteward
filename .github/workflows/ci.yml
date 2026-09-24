@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       # --ignore-scripts: dependencies can't run install scripts in CI.

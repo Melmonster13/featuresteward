@@ -80,7 +80,7 @@ docker compose up --build
 - Dashboard: http://localhost:8080
 - API: http://localhost:8080/api/v1
 
-To work on the dashboard with live reload, run `make web-dev` (needs Node.js 22) and open http://localhost:3000. It forwards API calls to the server on port 8080.
+To work on the dashboard with live reload, run `make web-dev` (needs Node.js 24) and open http://localhost:3000. It forwards API calls to the server on port 8080.
 
 Run migrations, create the first admin, and seed demo data:
 

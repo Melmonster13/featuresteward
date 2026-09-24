@@ -12,6 +12,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Stay on Node LTS releases; odd-numbered majors never become LTS.
+      - dependency-name: node
+        versions: ["23.x", "25.x", "27.x", "29.x"]
   - package-ecosystem: npm
     directory: /web
     schedule:
