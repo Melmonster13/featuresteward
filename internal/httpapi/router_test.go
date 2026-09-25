@@ -400,6 +400,8 @@ func TestRolePermissions(t *testing.T) {
 		{"DELETE", "/api/v1/flags/new-checkout", "", auth.RoleAdmin, 204},
 		// new-checkout's steward is mel, so only admins can reassign it here.
 		{"PUT", "/api/v1/flags/new-checkout/steward", `{"steward":"sam"}`, auth.RoleAdmin, 200},
+		// Likewise for marking it permanent.
+		{"PUT", "/api/v1/flags/new-checkout/permanent", `{"reason":"ops kill switch"}`, auth.RoleAdmin, 200},
 		{"GET", "/api/v1/users", "", auth.RoleAdmin, 200},
 		{"POST", "/api/v1/users", `{"handle":"new","role":"viewer"}`, auth.RoleAdmin, 201},
 		{"GET", "/api/v1/users/sam", "", auth.RoleAdmin, 200},

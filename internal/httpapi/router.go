@@ -32,6 +32,20 @@ type server struct {
 	checks []healthCheck
 	limit  RateLimiter
 	seen   func(flagKey, env string)
+
+	staleAfter time.Duration
+	now        func() time.Time
+}
+
+// WithStaleAfter sets how long a flag can go unused, or settled, before
+// it's reported stale. The default is 30 days.
+func WithStaleAfter(d time.Duration) Option {
+	return func(s *server) { s.staleAfter = d }
+}
+
+// withClock replaces the clock; for tests.
+func withClock(now func() time.Time) Option {
+	return func(s *server) { s.now = now }
 }
 
 // WithUsage calls seen after each successful evaluation, to track which
@@ -74,7 +88,7 @@ func WithHealthCheck(name string, check func(context.Context) error) Option {
 // every user is at least a viewer. State-changing routes accept an
 // Idempotency-Key header.
 func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *slog.Logger, opts ...Option) http.Handler {
-	s := &server{flags: flags, users: users, idem: idem, log: log}
+	s := &server{flags: flags, users: users, idem: idem, log: log, staleAfter: 30 * 24 * time.Hour, now: time.Now}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -98,6 +112,8 @@ func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *
 	route("PUT /api/v1/flags/{key}", auth.RoleEditor, s.updateFlag)
 	// Admins, or the flag's current steward (any role); see setSteward.
 	route("PUT /api/v1/flags/{key}/steward", auth.RoleViewer, s.setSteward)
+	// Admins, or the flag's steward; see setPermanent.
+	route("PUT /api/v1/flags/{key}/permanent", auth.RoleEditor, s.setPermanent)
 	// Protected environments take change requests instead, except the kill
 	// switch and admins' emergency changes; see updateEnvironment.
 	route("PUT /api/v1/flags/{key}/environments/{env}", auth.RoleEditor, s.updateEnvironment)

@@ -233,7 +233,7 @@ Every request, review, and change is recorded in the flag's history.
 | `PORT` | API port | `8080` |
 | `CACHE_TTL_SECONDS` | How long evaluations and SDK key lookups stay cached. Changes clear it right away; this only bounds how stale it can get if Redis misses a change. `0` turns the cache off. | `30` |
 | `RATE_LIMIT_PER_MIN` | Evaluations per minute for each SDK key or user. Over it, `/evaluate` returns `429` with `Retry-After`; every response has `RateLimit-*` headers. `0` turns it off. Needs Redis. | `600` |
-| `STALE_AFTER_DAYS` | Days a flag can sit unchanged at 0% or 100% before it's flagged stale | `30` |
+| `STALE_AFTER_DAYS` | Days before a flag counts as stale: not evaluated anywhere, or serving one value to everyone, unchanged, for this long. See [Stale flags](#stale-flags). | `30` |
 
 ---
 

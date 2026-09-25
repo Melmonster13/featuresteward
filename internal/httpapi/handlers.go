@@ -22,14 +22,83 @@ type flagJSON struct {
 	UpdatedAt    time.Time                 `json:"updated_at"`
 	ArchivedAt   *time.Time                `json:"archived_at,omitempty"`
 	Environments map[string]flag.EnvConfig `json:"environments"`
+	// PermanentReason is null unless the flag is meant to last.
+	PermanentReason *string                 `json:"permanent_reason"`
+	Activity        map[string]activityJSON `json:"activity"`
+	// Stale is null unless the flag looks safe to remove.
+	Stale *staleJSON `json:"stale"`
+}
+
+type activityJSON struct {
+	ChangedAt   time.Time `json:"changed_at"`
+	EvaluatedAt time.Time `json:"evaluated_at"`
+}
+
+type staleJSON struct {
+	Reason     flag.StaleReason `json:"reason"`
+	Since      time.Time        `json:"since"`
+	Suggestion string           `json:"suggestion"`
 }
 
 func toFlagJSON(f flag.Flag) flagJSON {
 	return flagJSON{
 		Key: f.Key, Name: f.Name, Description: f.Description, Steward: flag.NewStewardSnapshot(f.Steward).Steward,
 		CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, ArchivedAt: f.ArchivedAt,
-		Environments: f.Environments,
+		Environments: f.Environments, PermanentReason: flag.NewPermanentSnapshot(f.PermanentReason).Reason,
+		Activity: activityOf(f),
 	}
+}
+
+func activityOf(f flag.Flag) map[string]activityJSON {
+	out := make(map[string]activityJSON, len(f.Activity))
+	for env, a := range f.Activity {
+		out[env] = activityJSON{ChangedAt: a.ChangedAt, EvaluatedAt: a.EvaluatedAt}
+	}
+	return out
+}
+
+// staleness has what flag.Assess needs beyond the flag itself.
+type staleness struct {
+	envs    []flag.Environment
+	pending map[string]bool // flags with a pending change request
+	now     time.Time
+	after   time.Duration
+}
+
+// staleness loads environments and pending requests, for one flag or,
+// with key "", all of them.
+func (s *server) staleness(r *http.Request, key string) (staleness, error) {
+	envs, err := s.flags.ListEnvironments(r.Context())
+	if err != nil {
+		return staleness{}, err
+	}
+	rs, err := s.flags.ListChangeRequests(r.Context(), flag.RequestFilter{Status: flag.RequestPending, FlagKey: key})
+	if err != nil {
+		return staleness{}, err
+	}
+	pending := map[string]bool{}
+	for _, cr := range rs {
+		pending[cr.FlagKey] = true
+	}
+	return staleness{envs: envs, pending: pending, now: s.now(), after: s.staleAfter}, nil
+}
+
+func (st staleness) flagJSON(f flag.Flag) flagJSON {
+	j := toFlagJSON(f)
+	if a := flag.Assess(f, st.envs, st.now, st.after, st.pending[f.Key]); a.Stale() {
+		j.Stale = &staleJSON{Reason: a.Reason, Since: a.Since, Suggestion: a.Suggestion}
+	}
+	return j
+}
+
+// writeFlag responds with a flag, including whether it's stale.
+func (s *server) writeFlag(w http.ResponseWriter, r *http.Request, status int, f flag.Flag) {
+	st, err := s.staleness(r, f.Key)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, status, st.flagJSON(f))
 }
 
 type auditEventJSON struct {
@@ -59,6 +128,20 @@ func (s *server) listFlags(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	onlyStale := false
+	switch r.URL.Query().Get("stale") {
+	case "":
+	case "true":
+		onlyStale = true
+	default:
+		writeError(w, http.StatusBadRequest, "stale must be true, or left out")
+		return
+	}
+	st, err := s.staleness(r, "")
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	match := func(flag.Flag) bool { return true }
 	switch steward := r.URL.Query().Get("steward"); steward {
 	case "":
@@ -74,8 +157,11 @@ func (s *server) listFlags(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []flagJSON{}
 	for _, f := range flags {
-		if match(f) {
-			out = append(out, toFlagJSON(f))
+		if !match(f) {
+			continue
+		}
+		if j := st.flagJSON(f); !onlyStale || j.Stale != nil {
+			out = append(out, j)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"flags": out})
@@ -107,6 +193,33 @@ func (s *server) checkSteward(r *http.Request, handle string) error {
 	return errs.Invalid("steward must be an active user with the editor role or higher")
 }
 
+// setPermanent lets an admin, or the flag's steward, mark a flag as meant
+// to last (never stale), or clear the mark with an empty reason.
+func (s *server) setPermanent(w http.ResponseWriter, r *http.Request) {
+	f, err := s.flags.GetFlag(r.Context(), r.PathValue("key"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	me := principalFrom(r).user
+	if !me.Role.AtLeast(auth.RoleAdmin) && (f.Steward == "" || f.Steward != me.Handle) {
+		writeError(w, http.StatusForbidden, "only an admin or the flag's steward can mark it permanent")
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	f, err = s.flags.SetPermanent(r.Context(), actor(r), f.Key, req.Reason)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.writeFlag(w, r, http.StatusOK, f)
+}
+
 // setSteward lets an admin, or the flag's current steward, reassign it.
 func (s *server) setSteward(w http.ResponseWriter, r *http.Request) {
 	f, err := s.flags.GetFlag(r.Context(), r.PathValue("key"))
@@ -134,7 +247,7 @@ func (s *server) setSteward(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFlagJSON(f))
+	s.writeFlag(w, r, http.StatusOK, f)
 }
 
 func (s *server) createFlag(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +272,7 @@ func (s *server) createFlag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/flags/"+f.Key)
-	writeJSON(w, http.StatusCreated, toFlagJSON(f))
+	s.writeFlag(w, r, http.StatusCreated, f)
 }
 
 func (s *server) getFlag(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +281,7 @@ func (s *server) getFlag(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFlagJSON(f))
+	s.writeFlag(w, r, http.StatusOK, f)
 }
 
 func (s *server) updateFlag(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +297,7 @@ func (s *server) updateFlag(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFlagJSON(f))
+	s.writeFlag(w, r, http.StatusOK, f)
 }
 
 func (s *server) archiveFlag(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +364,7 @@ func (s *server) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toFlagJSON(f))
+	s.writeFlag(w, r, http.StatusOK, f)
 }
 
 // directChangeAllowed reports whether cfg may skip approval in a protected

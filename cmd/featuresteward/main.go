@@ -101,6 +101,14 @@ func run(log *slog.Logger) error {
 	case rdb != nil:
 		log.Info("RATE_LIMIT_PER_MIN is 0; evaluations aren't rate limited")
 	}
+	staleDays, err := intEnv("STALE_AFTER_DAYS", 30, "days")
+	if err != nil {
+		return err
+	}
+	if staleDays == 0 {
+		return errors.New("STALE_AFTER_DAYS must be at least 1")
+	}
+	opts = append(opts, httpapi.WithStaleAfter(time.Duration(staleDays)*24*time.Hour))
 	recorder := usage.New(db, log)
 	opts = append(opts, httpapi.WithUsage(recorder.Seen))
 	api := httpapi.NewRouter(flags, users, db, log, opts...)
