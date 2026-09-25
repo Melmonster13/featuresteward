@@ -11,7 +11,7 @@ test:
 
 # Needs Postgres running (make up, or docker compose up -d postgres).
 test-int:
-	TEST_DATABASE_URL="$(DATABASE_URL)" go test -tags integration ./...
+	TEST_DATABASE_URL="$(DATABASE_URL)" TEST_REDIS_URL="redis://localhost:6379/1" go test -tags integration ./...
 
 generate:
 	docker run --rm -v "$(CURDIR)":/src -w /src $(SQLC_IMAGE) generate

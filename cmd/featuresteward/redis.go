@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -31,6 +33,7 @@ func connectRedis(ctx context.Context, rawURL string, log *slog.Logger) (*redis.
 	opts.WriteTimeout = 100 * time.Millisecond
 	opts.PoolTimeout = 200 * time.Millisecond
 	opts.MaxRetries = 1
+	opts.DialerRetries = 1
 	c := redis.NewClient(opts)
 	if err := c.Ping(ctx).Err(); err != nil {
 		log.Warn("Redis is unavailable; continuing without it until it's back", "err", err)
@@ -42,4 +45,17 @@ type redisLog struct{ log *slog.Logger }
 
 func (l redisLog) Printf(ctx context.Context, format string, v ...any) {
 	l.log.WarnContext(ctx, fmt.Sprintf(format, v...), "component", "redis")
+}
+
+// secondsEnv reads a whole number of seconds, 0 or more, from name.
+func secondsEnv(name string, fallback int) (time.Duration, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return time.Duration(fallback) * time.Second, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s must be a whole number of seconds, 0 or more; got %q", name, v)
+	}
+	return time.Duration(n) * time.Second, nil
 }

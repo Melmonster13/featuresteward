@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Melmonster13/featuresteward/internal/cache"
+	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/httpapi"
 	"github.com/Melmonster13/featuresteward/internal/store"
 	"github.com/Melmonster13/featuresteward/web"
@@ -72,7 +74,18 @@ func run(log *slog.Logger) error {
 	}
 
 	db := store.NewPostgres(pool)
-	api := httpapi.NewRouter(db, db, db, log, httpapi.WithHealthCheck("redis", redisCheck))
+	ttl, err := secondsEnv("CACHE_TTL_SECONDS", 30)
+	if err != nil {
+		return err
+	}
+	var flags flag.Store = db
+	switch {
+	case rdb != nil && ttl > 0:
+		flags = cache.New(db, rdb, ttl, log)
+	case rdb != nil:
+		log.Info("CACHE_TTL_SECONDS is 0; evaluations aren't cached")
+	}
+	api := httpapi.NewRouter(flags, db, db, log, httpapi.WithHealthCheck("redis", redisCheck))
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api)
 	mux.Handle("/healthz", api)

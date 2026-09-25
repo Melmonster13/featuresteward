@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -44,4 +45,19 @@ func TestConnectRedis(t *testing.T) {
 		t.Errorf("down: %v, %v, logs %q", down, err, logs.String())
 	}
 	down.Close()
+}
+
+func TestSecondsEnv(t *testing.T) {
+	for v, want := range map[string]time.Duration{"": 30 * time.Second, "0": 0, "5": 5 * time.Second} {
+		t.Setenv("TEST_SECONDS", v)
+		if got, err := secondsEnv("TEST_SECONDS", 30); err != nil || got != want {
+			t.Errorf("%q = %v, %v; want %v", v, got, err, want)
+		}
+	}
+	for _, v := range []string{"-1", "1.5", "30s", "x"} {
+		t.Setenv("TEST_SECONDS", v)
+		if _, err := secondsEnv("TEST_SECONDS", 30); err == nil || !strings.Contains(err.Error(), "TEST_SECONDS") {
+			t.Errorf("%q: err = %v", v, err)
+		}
+	}
 }
