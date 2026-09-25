@@ -20,3 +20,12 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+  - package-ecosystem: npm
+    directory: /extensions/vscode
+    schedule:
+      interval: weekly
+    ignore:
+      # Stay on the oldest VS Code the extension supports (engines.vscode).
+      - dependency-name: "@types/vscode"
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]

@@ -1,0 +1,53 @@
+{
+  "name": "featuresteward",
+  "displayName": "FeatureSteward",
+  "description": "See your FeatureSteward flags, their stewards, and stale flags without leaving the editor.",
+  "version": "0.1.0",
+  "publisher": "melmonster13",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Melmonster13/featuresteward.git",
+    "directory": "extensions/vscode"
+  },
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "contributes": {
+    "commands": [
+      { "command": "featuresteward.signIn", "title": "Sign In", "category": "FeatureSteward" },
+      { "command": "featuresteward.signOut", "title": "Sign Out", "category": "FeatureSteward" }
+    ],
+    "configuration": {
+      "title": "FeatureSteward",
+      "properties": {
+        "featuresteward.url": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "The FeatureSteward server, such as `https://flags.example.com`. Only your user settings can set this, so a workspace can't send your token elsewhere."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --dir src"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@types/vscode": "1.125.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

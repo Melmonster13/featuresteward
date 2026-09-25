@@ -8,3 +8,6 @@
 /web/node_modules/
 /web/dist/*
 !/web/dist/.keep
+/extensions/vscode/node_modules/
+/extensions/vscode/out/
+*.vsix
