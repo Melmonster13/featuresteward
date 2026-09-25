@@ -34,6 +34,8 @@ Usage:
       In a protected environment (prod), toggle and rollout file a change
       request (--reason <text> tells the reviewer why), except turning a
       flag off. Admins can apply a change now with --emergency <reason>.
+  stew stale [--steward <handle>|me|none]   list flags that look safe to remove
+  stew permanent <flag> <reason> | --clear  mark a flag as meant to last, so it's never stale
   stew requests [--all] [--flag <flag>]     list pending change requests
   stew approve <id> [--comment <text>]      approve a request (steward, approver, admin)
   stew reject <id> [--comment <text>]       reject a request
@@ -110,21 +112,23 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 		return exitOK
 	}
 	commands := map[string]func(*env, []string) error{
-		"login":    cmdLogin,
-		"logout":   cmdLogout,
-		"whoami":   cmdWhoami,
-		"list":     cmdList,
-		"status":   cmdStatus,
-		"create":   cmdCreate,
-		"toggle":   cmdToggle,
-		"rollout":  cmdRollout,
-		"steward":  cmdSteward,
-		"archive":  cmdArchive,
-		"version":  cmdVersion,
-		"requests": cmdRequests,
-		"approve":  cmdApprove,
-		"reject":   cmdReject,
-		"cancel":   cmdCancel,
+		"login":     cmdLogin,
+		"logout":    cmdLogout,
+		"whoami":    cmdWhoami,
+		"list":      cmdList,
+		"status":    cmdStatus,
+		"create":    cmdCreate,
+		"toggle":    cmdToggle,
+		"rollout":   cmdRollout,
+		"steward":   cmdSteward,
+		"archive":   cmdArchive,
+		"version":   cmdVersion,
+		"requests":  cmdRequests,
+		"stale":     cmdStale,
+		"permanent": cmdPermanent,
+		"approve":   cmdApprove,
+		"reject":    cmdReject,
+		"cancel":    cmdCancel,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {

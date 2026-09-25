@@ -74,6 +74,23 @@ type Flag struct {
 	UpdatedAt    time.Time            `json:"updated_at"`
 	ArchivedAt   *time.Time           `json:"archived_at"`
 	Environments map[string]EnvConfig `json:"environments"`
+	// PermanentReason is set when the flag is meant to last.
+	PermanentReason *string             `json:"permanent_reason"`
+	Activity        map[string]Activity `json:"activity"`
+	// Stale is set when the flag looks safe to remove.
+	Stale *Staleness `json:"stale"`
+}
+
+type Activity struct {
+	ChangedAt   time.Time `json:"changed_at"`
+	EvaluatedAt time.Time `json:"evaluated_at"`
+}
+
+// Staleness says why a flag looks safe to remove.
+type Staleness struct {
+	Reason     string    `json:"reason"` // unused, always_on, always_off, settled_mixed
+	Since      time.Time `json:"since"`
+	Suggestion string    `json:"suggestion"`
 }
 
 type Environment struct {
@@ -89,11 +106,18 @@ func (c *Client) Me(ctx context.Context) (User, error) {
 }
 
 // ListFlags lists active flags. steward filters by handle, or "none"
-// for unassigned; "" lists all.
-func (c *Client) ListFlags(ctx context.Context, steward string) ([]Flag, error) {
-	path := "/api/v1/flags"
+// for unassigned; "" lists all. staleOnly lists only stale flags.
+func (c *Client) ListFlags(ctx context.Context, steward string, staleOnly bool) ([]Flag, error) {
+	q := url.Values{}
 	if steward != "" {
-		path += "?steward=" + url.QueryEscape(steward)
+		q.Set("steward", steward)
+	}
+	if staleOnly {
+		q.Set("stale", "true")
+	}
+	path := "/api/v1/flags"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	var out struct {
 		Flags []Flag `json:"flags"`
@@ -237,6 +261,14 @@ func normalize(cfg EnvConfig) EnvConfig {
 func (c *Client) SetSteward(ctx context.Context, key, steward string) (Flag, error) {
 	var f Flag
 	err := c.do(ctx, http.MethodPut, "/api/v1/flags/"+url.PathEscape(key)+"/steward", map[string]string{"steward": steward}, &f)
+	return f, err
+}
+
+// SetPermanent marks a flag as meant to last, or clears the mark when
+// reason is "".
+func (c *Client) SetPermanent(ctx context.Context, key, reason string) (Flag, error) {
+	var f Flag
+	err := c.do(ctx, http.MethodPut, "/api/v1/flags/"+url.PathEscape(key)+"/permanent", map[string]string{"reason": reason}, &f)
 	return f, err
 }
 

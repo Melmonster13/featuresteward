@@ -620,3 +620,8 @@ button.danger {
 .inline-form .error {
   flex-basis: 100%;
 }
+
+.tag.stale {
+  border-color: var(--partial-text);
+  color: var(--partial-text);
+}

@@ -57,6 +57,19 @@ export interface Flag {
   updated_at: string;
   archived_at?: string;
   environments: Record<string, EnvConfig>;
+  // Set when the flag is meant to last; it's never reported stale.
+  permanent_reason: string | null;
+  activity: Record<string, { changed_at: string; evaluated_at: string }>;
+  // Set when the flag looks safe to remove.
+  stale: Staleness | null;
+}
+
+export type StaleReason = "unused" | "always_on" | "always_off" | "settled_mixed";
+
+export interface Staleness {
+  reason: StaleReason;
+  since: string;
+  suggestion: string;
 }
 
 export interface Environment {
@@ -132,10 +145,18 @@ export class Api {
   }
 
   // flags lists active flags; steward filters by handle, or "none" for
-  // flags with no active steward.
-  async flags(steward = ""): Promise<Flag[]> {
-    const query = steward ? `?steward=${encodeURIComponent(steward)}` : "";
+  // flags with no active steward; staleOnly keeps only stale flags.
+  async flags(steward = "", staleOnly = false): Promise<Flag[]> {
+    const params = new URLSearchParams();
+    if (steward) params.set("steward", steward);
+    if (staleOnly) params.set("stale", "true");
+    const query = params.toString() ? `?${params}` : "";
     return (await this.request<{ flags: Flag[] }>("GET", `/api/v1/flags${query}`)).flags;
+  }
+
+  // setPermanent marks a flag as meant to last, or clears it with "".
+  setPermanent(key: string, reason: string): Promise<Flag> {
+    return this.request("PUT", `${flagPath(key)}/permanent`, { reason });
   }
 
   createFlag(flag: NewFlag): Promise<Flag> {

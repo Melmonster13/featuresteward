@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Melmonster13/featuresteward/internal/auth"
 	"github.com/Melmonster13/featuresteward/internal/auth/authtest"
 	"github.com/Melmonster13/featuresteward/internal/client"
+	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/flag/flagtest"
 	"github.com/Melmonster13/featuresteward/internal/httpapi"
 	"github.com/Melmonster13/featuresteward/internal/idempotency/idemtest"
@@ -25,17 +27,18 @@ import (
 type harness struct {
 	t      *testing.T
 	url    string
+	flags  *flagtest.Memory
 	users  *authtest.Memory
 	config string // XDG_CONFIG_HOME
 	env    map[string]string
 }
 
-func newHarness(t *testing.T) *harness {
-	users := authtest.NewMemory()
-	srv := httptest.NewServer(httpapi.NewRouter(flagtest.NewMemory(), users, idemtest.NewMemory(),
-		slog.New(slog.NewTextHandler(io.Discard, nil))))
+func newHarness(t *testing.T, opts ...httpapi.Option) *harness {
+	flags, users := flagtest.NewMemory(), authtest.NewMemory()
+	srv := httptest.NewServer(httpapi.NewRouter(flags, users, idemtest.NewMemory(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), opts...))
 	t.Cleanup(srv.Close)
-	h := &harness{t: t, url: srv.URL, users: users, config: t.TempDir()}
+	h := &harness{t: t, url: srv.URL, flags: flags, users: users, config: t.TempDir()}
 	h.env = map[string]string{"XDG_CONFIG_HOME": h.config}
 	return h
 }
@@ -500,5 +503,78 @@ func TestRequestCommandErrors(t *testing.T) {
 	}
 	if code, _, errOut := h.stew("", "approve", "99"); code != 4 || !strings.Contains(errOut, "request #99 not found") {
 		t.Errorf("unknown request = %d %q", code, errOut)
+	}
+}
+
+func TestStaleAndPermanent(t *testing.T) {
+	// With a tiny threshold, every flag is stale right away: unused unless
+	// it's been evaluated after now.
+	h := newHarness(t, httpapi.WithStaleAfter(time.Nanosecond))
+	admin := h.token("mel", auth.RoleAdmin)
+	h.token("sam", auth.RoleEditor)
+	h.env["STEW_URL"] = h.url
+	h.env["STEW_TOKEN"] = admin
+	h.api(admin, "POST", "/api/v1/flags", `{"key":"old-banner","name":"Old banner","steward":"sam"}`)
+	h.api(admin, "POST", "/api/v1/flags", `{"key":"launched","name":"Launched"}`)
+	for _, env := range []string{"dev", "staging", "prod"} {
+		h.api(admin, "PUT", "/api/v1/flags/launched/environments/"+env, `{"enabled":true,"rollout_percentage":100,"reason":"x"}`)
+	}
+	h.flags.RecordEvaluations(context.Background(), []flag.Evaluation{{Flag: "launched", Environment: "prod", At: time.Now().Add(time.Hour)}})
+
+	out := h.mustStew("", "stale")
+	for _, want := range []string{
+		"KEY         STEWARD  STALE      SINCE",
+		"launched    @mel     always on  ",
+		"old-banner  @sam     unused     ",
+		"always on: It has been on for everyone",
+		"unused: Nothing has evaluated it recently",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stale missing %q:\n%s", want, out)
+		}
+	}
+	if out := h.mustStew("", "stale", "--steward", "@sam"); strings.Contains(out, "launched") || !strings.Contains(out, "old-banner") {
+		t.Errorf("stale --steward sam:\n%s", out)
+	}
+	if out := h.mustStew("", "stale", "--steward", "me"); strings.Contains(out, "old-banner") || !strings.Contains(out, "launched") {
+		t.Errorf("stale --steward me:\n%s", out)
+	}
+	if status := h.mustStew("", "status", "launched"); !strings.Contains(status, "Stale: always on since ") {
+		t.Errorf("status:\n%s", status)
+	}
+
+	out = h.mustStew("", "permanent", "launched", "ops kill switch")
+	if out != "launched is permanent: ops kill switch. It won't be reported stale.\n" {
+		t.Errorf("permanent = %q", out)
+	}
+	if status := h.mustStew("", "status", "launched"); !strings.Contains(status, "Permanent: ops kill switch") || strings.Contains(status, "Stale:") {
+		t.Errorf("status after permanent:\n%s", status)
+	}
+	var list struct {
+		Flags []client.Flag `json:"flags"`
+	}
+	json.Unmarshal([]byte(h.mustStew("", "stale", "--json")), &list)
+	if len(list.Flags) != 1 || list.Flags[0].Key != "old-banner" || list.Flags[0].Stale.Reason != "unused" {
+		t.Errorf("stale --json = %+v", list.Flags)
+	}
+	if out := h.mustStew("", "permanent", "launched", "--clear"); !strings.Contains(out, "no longer permanent") {
+		t.Errorf("clear = %q", out)
+	}
+
+	// Only the steward or an admin, and a reason is required.
+	h.env["STEW_TOKEN"] = h.token("lee", auth.RoleEditor)
+	if code, _, errOut := h.stew("", "permanent", "old-banner", "mine"); code != 3 || !strings.Contains(errOut, "steward") {
+		t.Errorf("non-steward = %d %q", code, errOut)
+	}
+	for _, args := range [][]string{{"permanent", "old-banner"}, {"permanent", "old-banner", "  "}, {"stale", "extra"}} {
+		if code, _, _ := h.stew("", args...); code != 2 {
+			t.Errorf("stew %v = %d, want 2", args, code)
+		}
+	}
+	h.env["STEW_TOKEN"] = admin
+	h.mustStew("", "permanent", "old-banner", "seasonal")
+	h.mustStew("", "permanent", "launched", "ops")
+	if _, _, errOut := h.stew("", "stale"); !strings.Contains(errOut, "No stale flags.") {
+		t.Errorf("no stale flags = %q", errOut)
 	}
 }

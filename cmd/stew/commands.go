@@ -142,7 +142,7 @@ func cmdList(e *env, args []string) error {
 		}
 		keys = []string{*envName}
 	}
-	flags, err := c.ListFlags(e.ctx, *steward)
+	flags, err := c.ListFlags(e.ctx, *steward, false)
 	if err != nil {
 		return err
 	}
@@ -248,6 +248,12 @@ func printFlag(e *env, f client.Flag, envs []client.Environment) {
 	fmt.Fprintf(e.stdout, "Steward: %s\n", stewardName(f.Steward))
 	if f.ArchivedAt != nil {
 		fmt.Fprintf(e.stdout, "Archived: %s\n", f.ArchivedAt.Format("2006-01-02 15:04 MST"))
+	}
+	if f.PermanentReason != nil {
+		fmt.Fprintf(e.stdout, "Permanent: %s\n", *f.PermanentReason)
+	}
+	if f.Stale != nil {
+		fmt.Fprintf(e.stdout, "Stale: %s since %s. %s\n", staleLabel(f.Stale.Reason), f.Stale.Since.Format("2006-01-02"), f.Stale.Suggestion)
 	}
 	fmt.Fprintln(e.stdout)
 	tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
@@ -541,7 +547,7 @@ func cmdRequests(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	flags, err := c.ListFlags(e.ctx, "")
+	flags, err := c.ListFlags(e.ctx, "", false)
 	if err != nil {
 		return err
 	}
@@ -654,4 +660,123 @@ func requestErr(err error, id int64) error {
 		return notFound("request #%d not found", id)
 	}
 	return err
+}
+
+func cmdStale(e *env, args []string) error {
+	fs := e.flags("stale")
+	steward := fs.String("steward", "", "only flags with this steward: a handle, me, or none")
+	asJSON := fs.Bool("json", false, "print JSON")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	who := strings.TrimPrefix(*steward, "@")
+	if who == "me" {
+		me, err := c.Me(e.ctx)
+		if err != nil {
+			return err
+		}
+		who = me.Handle
+	}
+	flags, err := c.ListFlags(e.ctx, who, true)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		if flags == nil {
+			flags = []client.Flag{}
+		}
+		return e.writeJSON(map[string]any{"flags": flags})
+	}
+	if len(flags) == 0 {
+		fmt.Fprintln(e.stderr, "No stale flags.")
+		return nil
+	}
+	tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "KEY\tSTEWARD\tSTALE\tSINCE")
+	advice := map[string]string{}
+	var reasons []string
+	for _, f := range flags {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", f.Key, stewardName(f.Steward), staleLabel(f.Stale.Reason), f.Stale.Since.Format("2006-01-02"))
+		if _, ok := advice[f.Stale.Reason]; !ok {
+			reasons = append(reasons, f.Stale.Reason)
+		}
+		advice[f.Stale.Reason] = f.Stale.Suggestion
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	fmt.Fprintln(e.stdout)
+	for _, r := range reasons {
+		fmt.Fprintf(e.stdout, "%s: %s\n", staleLabel(r), advice[r])
+	}
+	return nil
+}
+
+func cmdPermanent(e *env, args []string) error {
+	fs := e.flags("permanent")
+	clear := fs.Bool("clear", false, "remove the permanent mark")
+	asJSON := fs.Bool("json", false, "print the flag as JSON")
+	var pos []string
+	var err error
+	if hasFlag(args, "clear") {
+		pos, err = e.parseArgs(fs, args, "flag")
+	} else {
+		pos, err = e.parseArgs(fs, args, "flag", "reason")
+	}
+	if err != nil {
+		return err
+	}
+	reason := ""
+	if !*clear {
+		reason = strings.TrimSpace(pos[1])
+		if reason == "" {
+			fmt.Fprintln(e.stderr, "stew permanent: give a reason, or use --clear")
+			return errUsage
+		}
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	f, err := c.SetPermanent(e.ctx, pos[0], reason)
+	if err != nil {
+		return flagErr(err, pos[0])
+	}
+	if *asJSON {
+		return e.writeJSON(f)
+	}
+	if reason == "" {
+		fmt.Fprintf(e.stdout, "%s is no longer permanent; it can be reported stale again.\n", f.Key)
+	} else {
+		fmt.Fprintf(e.stdout, "%s is permanent: %s. It won't be reported stale.\n", f.Key, reason)
+	}
+	return nil
+}
+
+// hasFlag reports whether args include --name or -name.
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == "--"+name || a == "-"+name || strings.HasPrefix(a, "--"+name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func staleLabel(reason string) string {
+	switch reason {
+	case "unused":
+		return "unused"
+	case "always_on":
+		return "always on"
+	case "always_off":
+		return "always off"
+	case "settled_mixed":
+		return "settled"
+	}
+	return reason
 }

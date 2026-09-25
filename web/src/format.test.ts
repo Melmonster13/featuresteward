@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEvent, Flag } from "./api";
 import {
-  atLeast, canReview, describeConfig, stateLabel, describeEvent, expiryDate, isKillSwitch, lockReason, tokenStatus, userHash, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
+  ago, atLeast, canReview, describeConfig, stateLabel, staleLabel, describeEvent, expiryDate, isKillSwitch, lockReason, tokenStatus, userHash, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
 } from "./format";
 
 describe("atLeast", () => {
@@ -28,7 +28,7 @@ describe("envState", () => {
 describe("matchesSearch", () => {
   const flag: Flag = {
     key: "new-checkout", name: "New checkout", description: "Faster payment page", steward: "sam",
-    created_at: "", updated_at: "", environments: {},
+    created_at: "", updated_at: "", environments: {}, permanent_reason: null, activity: {}, stale: null,
   };
   it("matches key, name, description, and steward, ignoring case", () => {
     for (const q of ["", "  ", "CHECKOUT", "payment", "sam", "new-"]) expect(matchesSearch(flag, q)).toBe(true);
@@ -231,5 +231,29 @@ describe("tokens", () => {
     expect(describeEvent(ev("token.revoked", { id: 3, name: "laptop", prefix: "fs_1a2b3c4d" }, null), env)).toBe(
       "revoked token “laptop” (fs_1a2b3c4d…)",
     );
+  });
+});
+
+describe("stale flags", () => {
+  it("labels reasons and ages", () => {
+    expect(staleLabel("unused")).toBe("Unused");
+    expect(staleLabel("always_on")).toBe("Always on");
+    const now = new Date("2026-09-25T12:00:00Z");
+    expect(ago("2026-09-25T01:00:00Z", now)).toBe("today");
+    expect(ago("2026-09-24T11:00:00Z", now)).toBe("yesterday");
+    expect(ago("2026-08-26T12:00:00Z", now)).toBe("30 days ago");
+    expect(ago("2026-09-26T12:00:00Z", now)).toBe("today"); // clock skew
+  });
+
+  it("keeps the stale filter in the URL", () => {
+    const r = parseRoute(flagsHash({ q: "", env: "", steward: "mine", stale: "1" }));
+    expect(r.page === "flags" && Object.fromEntries(r.params)).toEqual({ steward: "mine", stale: "1" });
+  });
+
+  it("describes permanent marks", () => {
+    const env = (k: string) => k;
+    const ev = (after: unknown): AuditEvent => ({ id: 1, occurred_at: "", actor: "kim", action: "flag.permanent_changed", before: null, after });
+    expect(describeEvent(ev({ permanent_reason: "ops kill switch" }), env)).toBe("marked it permanent (“ops kill switch”)");
+    expect(describeEvent(ev({ permanent_reason: null }), env)).toBe("removed the permanent mark");
   });
 });

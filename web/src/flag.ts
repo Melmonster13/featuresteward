@@ -1,6 +1,6 @@
 import { ApiError, type ChangeRequest, type EnvConfig, type Environment, type Flag, type Rule } from "./api";
 import { h } from "./dom";
-import { atLeast, envState, flagHash, isKillSwitch, lockReason, parseValues, sameConfig } from "./format";
+import { ago, atLeast, envState, flagHash, isKillSwitch, lockReason, parseValues, sameConfig, staleLabel } from "./format";
 import type { App } from "./main";
 import { requestCard } from "./requests";
 import { formatTime, historyList } from "./ui";
@@ -46,6 +46,14 @@ export async function flagPage(app: App, key: string): Promise<(Node | string)[]
       ? h("p", { class: "banner", role: "note" }, `Archived ${formatTime(flag.archived_at!)}. Evaluating it returns not found, and it can't be changed.`)
       : "",
     h("p", { class: "meta" }, h("span", {}, "Key "), h("code", {}, flag.key), h("span", {}, " · Steward "), stewardText),
+    flag.stale && !archived
+      ? h(
+          "div",
+          { class: "banner", role: "note" },
+          h("strong", {}, `Stale: ${staleLabel(flag.stale.reason).toLowerCase()} since ${formatTime(flag.stale.since)}. `),
+          flag.stale.suggestion,
+        )
+      : "",
     h("h2", {}, "Environments"),
     h(
       "div",
@@ -53,6 +61,7 @@ export async function flagPage(app: App, key: string): Promise<(Node | string)[]
       ...envs.map((env) => envCard(app, flag, env, archived, changed, envName, pending.find((r) => r.environment === env.key))),
     ),
     canReassign ? stewardForm(app, flag, changed) : "",
+    !archived ? permanentSection(app, flag, canReassign) : "",
     h("section", { "aria-labelledby": "history-title" }, h("h2", { id: "history-title" }, "History"), history),
     !archived && atLeast(app.user.role, "admin") ? archiveForm(app, flag) : "",
   ];
@@ -306,8 +315,72 @@ function envCard(
       summary,
     ),
     why ? h("p", { class: "hint" }, why) : "",
+    flag.activity?.[env.key]
+      ? h(
+          "p",
+          { class: "hint" },
+          `Changed ${ago(flag.activity[env.key].changed_at)} · last evaluated ${ago(flag.activity[env.key].evaluated_at)}`,
+        )
+      : "",
     pendingBox,
     form,
+  );
+}
+
+// permanentSection shows whether a flag is meant to last. Admins and the
+// flag's steward can change it; permanent flags are never reported stale.
+function permanentSection(app: App, flag: Flag, canEdit: boolean): HTMLElement {
+  const status = h("p", { class: "status", role: "status" });
+  const error = h("p", { class: "error", role: "alert" });
+  const save = async (reason: string) => {
+    error.textContent = "";
+    try {
+      await app.api.setPermanent(flag.key, reason);
+      app.flash(reason ? `${flag.key} is permanent. It won't be reported stale.` : `${flag.key} is no longer permanent.`);
+      app.navigate(flagHash(flag.key));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return app.fail(err);
+      error.textContent = app.message(err);
+    }
+  };
+  const title = h("h2", { id: "permanent-title" }, "Meant to last?");
+  if (flag.permanent_reason) {
+    return h(
+      "section",
+      { "aria-labelledby": "permanent-title" },
+      title,
+      h("p", {}, "Permanent: ", h("span", { class: "quote" }, flag.permanent_reason), ". It's never reported stale."),
+      canEdit ? h("button", { type: "button", class: "secondary", onclick: () => save("") }, "Remove the permanent mark") : "",
+      status,
+      error,
+    );
+  }
+  if (!canEdit) return h("span");
+  const reason = h("input", { id: "permanent-reason", autocomplete: "off", maxlength: 500, placeholder: "e.g. payments kill switch" });
+  return h(
+    "section",
+    { "aria-labelledby": "permanent-title" },
+    title,
+    h("p", { class: "hint" }, "Mark flags you mean to keep, like kill switches, so they're never reported stale."),
+    h(
+      "form",
+      {
+        class: "inline-form",
+        onsubmit: (event) => {
+          event.preventDefault();
+          if (!reason.value.trim()) {
+            error.textContent = "Say why it's meant to last.";
+            reason.focus();
+            return;
+          }
+          save(reason.value.trim());
+        },
+      },
+      h("div", { class: "field" }, h("label", { for: "permanent-reason" }, "Reason"), reason),
+      h("button", { type: "submit", class: "secondary" }, "Mark as permanent"),
+    ),
+    status,
+    error,
   );
 }
 

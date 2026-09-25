@@ -1,4 +1,4 @@
-import type { AuditEvent, ChangeRequest, EnvConfig, Flag, Role, Rule, User } from "./api";
+import type { AuditEvent, ChangeRequest, EnvConfig, Flag, Role, Rule, StaleReason, User } from "./api";
 
 const rank: Record<Role, number> = { viewer: 1, editor: 2, approver: 3, admin: 4 };
 
@@ -59,6 +59,19 @@ export function stateLabel(cfg: EnvConfig): string {
   if (cfg.enabled) return s;
   const on = envState({ ...cfg, enabled: true }).label;
   return on === "On" ? s : `Off (${on} when on)`;
+}
+
+export function staleLabel(reason: StaleReason): string {
+  return { unused: "Unused", always_on: "Always on", always_off: "Always off", settled_mixed: "Settled" }[reason] ?? reason;
+}
+
+// ago says roughly how long ago iso was, in days: "today", "yesterday",
+// "12 days ago".
+export function ago(iso: string, now = new Date()): string {
+  const days = Math.floor((now.getTime() - new Date(iso).getTime()) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  return `${days} days ago`;
 }
 
 export function matchesSearch(flag: Flag, query: string): boolean {
@@ -145,7 +158,7 @@ function safeDecode(s: string): string {
 }
 
 // flagsHash builds the list page's URL, leaving out empty filters.
-export function flagsHash(filters: { q: string; env: string; steward: string }): string {
+export function flagsHash(filters: { q: string; env: string; steward: string; stale?: string }): string {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
   const query = params.toString();
@@ -220,6 +233,10 @@ export function describeEvent(e: AuditEvent, envName: (key: string) => string): 
       return `changed the steward from ${handle(before.steward)} to ${handle(after.steward)}`;
     case "flag.archived":
       return "archived the flag";
+    case "flag.permanent_changed":
+      return typeof after.permanent_reason === "string"
+        ? `marked it permanent (“${after.permanent_reason}”)`
+        : "removed the permanent mark";
     case "user.created":
       return `created the user as ${after.role}`;
     case "user.role_changed":
