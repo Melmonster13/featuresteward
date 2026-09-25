@@ -4,8 +4,9 @@
   "description": "See your FeatureSteward flags, their stewards, and stale flags without leaving the editor.",
   "version": "0.1.0",
   "publisher": "melmonster13",
-  "license": "MIT",
   "private": true,
+  "license": "MIT",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/Melmonster13/featuresteward.git",
@@ -16,6 +17,12 @@
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "feature flags",
+    "feature toggles",
+    "stale flags",
+    "featuresteward"
   ],
   "main": "./out/extension.js",
   "activationEvents": [
@@ -97,13 +104,16 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "tsc",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --dir src"
+    "test": "vitest run --dir src",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "24.13.6",
     "@types/vscode": "1.125.0",
+    "@vscode/vsce": "4.0.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"
   }

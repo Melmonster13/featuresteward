@@ -35,7 +35,7 @@ Most teams either pay for a hosted service or hack flags into config files with 
 - [x] Rate-limited evaluation endpoint
 - [x] Web dashboard
 - [x] `stew` command-line tool
-- [ ] VS Code extension (hover status and steward, autocomplete flag keys, stale-flag finder)
+- [x] VS Code extension (hover status and steward, autocomplete flag keys, stale-flag finder)
 
 ---
 
@@ -148,6 +148,36 @@ For scripts, most commands take `--json`, and exit codes tell failures apart:
 | 2 | Bad usage |
 | 3 | Not logged in, or not allowed |
 | 4 | Flag or environment not found |
+
+---
+
+## The VS Code extension
+
+The extension in [`extensions/vscode`](extensions/vscode) brings flags into the editor:
+
+- **Hover** a flag key in any quoted string to see its state per environment, its steward, and whether it's stale, with a link to the dashboard.
+- **Autocomplete** flag keys after typing a quote, or with Ctrl+Space inside the quotes.
+- **Stale Flags** in the Explorer lists flags that look safe to remove, with each place your code uses them.
+
+Run **FeatureSteward: Sign In** and paste an API token; a viewer's token is enough, since the extension only reads. The token stays in VS Code's secret storage, and only your user settings can set the server URL, so a cloned repository can't redirect it. See the [extension's README](extensions/vscode/README.md) for details.
+
+**Build and install it locally:**
+
+```bash
+cd extensions/vscode
+npm ci --ignore-scripts
+npm run package                                   # builds featuresteward-<version>.vsix
+code --install-extension featuresteward-0.1.0.vsix
+```
+
+CI also builds the `.vsix` on every push; download it from the run's **Artifacts**.
+
+**Publish it** (only the maintainer does this, and the tokens never go in the repo):
+
+1. Create a publisher at https://marketplace.visualstudio.com/manage whose ID matches `publisher` in `extensions/vscode/package.json`.
+2. Create an Azure DevOps personal access token with the **Marketplace (Manage)** scope, then run `npx vsce login <publisher>` and paste it at the prompt.
+3. Run `npx vsce publish` from `extensions/vscode`.
+4. For Open VSX (VSCodium, Cursor, and others), create a token at https://open-vsx.org, then run `read -rs OVSX_PAT && export OVSX_PAT` (paste it; nothing is shown), `npx ovsx create-namespace <publisher>` once, and `npx ovsx publish featuresteward-0.1.0.vsix`.
 
 ---
 
@@ -282,9 +312,8 @@ internal/httpapi/      routes, handlers, and middleware
 internal/client/       Go API client used by stew
 migrations/            versioned SQL (up/down)
 web/                   dashboard (TypeScript), embedded in the server
+extensions/vscode/     VS Code extension (TypeScript)
 ```
-
-The VS Code extension will live in `extensions/vscode/` (Milestone 8).
 
 ---
 
@@ -308,9 +337,10 @@ The VS Code extension will live in `extensions/vscode/` (Milestone 8).
 make test           # unit tests
 make test-int       # integration tests (Postgres and Redis from docker compose)
 cd web && npm test  # dashboard tests
+cd extensions/vscode && npm test   # extension tests
 ```
 
-CI runs `go vet`, unit and integration tests against real Postgres and Redis, `govulncheck` and `npm audit`, a secret scan, the dashboard's typecheck, tests, and build, a Docker build, and a `stew` build for Linux, macOS, and Windows on every pull request.
+CI runs `go vet`, unit and integration tests against real Postgres and Redis, `govulncheck` and `npm audit`, a secret scan, the dashboard's typecheck, tests, and build, a Docker build, the VS Code extension's tests and package, and a `stew` build for Linux, macOS, and Windows on every pull request.
 
 ### Performance
 
@@ -340,7 +370,7 @@ With the cache on, an evaluation reads neither the flag nor the SDK key from Pos
 5. ✅ Approvals for production
 6. ✅ Redis cache + rate limiting
 7. ✅ Stale-flag detection
-8. VS Code extension
+8. ✅ VS Code extension
 9. Stretch: OpenFeature-compatible provider
 
 ---
