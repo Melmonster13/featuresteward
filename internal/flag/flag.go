@@ -45,8 +45,8 @@ type EnvConfig struct {
 type Environment struct {
 	Key  string `json:"key"`
 	Name string `json:"name"`
-	// Protected environments (prod by default) need an admin to change
-	// their flags.
+	// Changes to flags in protected environments (prod by default) go
+	// through change requests; see ChangeRequest.
 	Protected bool `json:"protected"`
 }
 

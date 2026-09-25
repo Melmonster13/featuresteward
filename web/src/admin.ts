@@ -425,7 +425,7 @@ export async function environmentsPage(app: App): Promise<Node[]> {
   await refresh();
   return [
     h("h1", { tabindex: "-1" }, "Environments"),
-    h("p", { class: "lead" }, "Only admins can change flags in a protected environment, until approvals are available."),
+    h("p", { class: "lead" }, "Changes to flags in a protected environment need approval from a second person, except turning a flag off."),
     list,
     h("h2", {}, "Add an environment"),
     form,

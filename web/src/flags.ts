@@ -85,7 +85,7 @@ function flagTable(flags: Flag[], envs: Environment[]): HTMLElement {
           {},
           h("th", { scope: "col" }, "Flag"),
           ...envs.map((e) =>
-            h("th", { scope: "col" }, e.name, ...(e.protected ? [" ", h("span", { class: "tag", title: "Changes need an admin" }, "protected")] : [])),
+            h("th", { scope: "col" }, e.name, ...(e.protected ? [" ", h("span", { class: "tag", title: "Changes need approval" }, "protected")] : [])),
           ),
           h("th", { scope: "col" }, "Steward"),
         ),

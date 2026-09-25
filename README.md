@@ -28,7 +28,7 @@ Most teams either pay for a hosted service or hack flags into config files with 
 - [x] Targeting rules (user IDs, groups)
 - [x] A steward (owner) on every flag
 - [x] Role-based access control (viewer / editor / approver / admin)
-- [ ] Approval workflow for production changes, routed to the flag's steward
+- [x] Approval workflow for production changes, routed to the flag's steward
 - [ ] Stale-flag detection with steward notifications
 - [x] Append-only audit log (tamper-evident hash chain as a stretch goal)
 - [ ] Redis-backed evaluation cache
@@ -90,7 +90,8 @@ To work on the dashboard with live reload, run `make web-dev` (needs Node.js 24)
 Sign in with an API token; the dashboard swaps it for a 12-hour session.
 
 - **Flags:** every flag's state per environment and its steward, with search and filters for environment and steward (yours, or none).
-- **Flag page:** turn a flag on or off, set its rollout and targeting rules per environment, reassign the steward, archive it, and read its history.
+- **Flag page:** turn a flag on or off, set its rollout and targeting rules per environment, reassign the steward, archive it, and read its history. In `prod`, saving becomes **Request change**, except turning the flag off.
+- **Reviews:** change requests waiting for you, your own, and recently closed ones, with the current and requested settings side by side.
 - **Your tokens:** create tokens for the CLI and scripts, and revoke them.
 - **Admin pages:** add users (with a first sign-in token to send them), change roles, disable users, manage SDK keys and environments.
 
@@ -126,9 +127,14 @@ stew rollout new-checkout staging 25       # 25% of users
 stew toggle new-checkout staging on
 stew steward new-checkout @sam             # hand the flag to another steward
 stew archive new-checkout --yes            # admins only
+
+stew rollout new-checkout prod 25 --reason "launch to a quarter"   # files a change request
+stew requests                              # pending requests, and whether you can review them
+stew approve 12 --comment "ship it"        # or: stew reject 12, stew cancel 12
+stew toggle new-checkout prod off          # the kill switch applies immediately
 ```
 
-`toggle` and `rollout` change one setting and keep the rest, including targeting rules. Every change carries an `Idempotency-Key`, so `stew` retries network errors and 502/503/504 responses without applying a change twice. Until approvals ship, only admins can change `prod`.
+`toggle` and `rollout` change one setting and keep the rest, including targeting rules. Every change carries an `Idempotency-Key`, so `stew` retries network errors and 502/503/504 responses without applying a change twice. See [Production approvals](#production-approvals) for how `prod` changes work.
 
 For scripts, most commands take `--json`, and exit codes tell failures apart:
 
@@ -191,13 +197,30 @@ Each user is assigned a stable bucket from `hash(flag_key + user_id) % 100`. A f
 | Role | Can do |
 |---|---|
 | Viewer | See flags, stewards, and audit history |
-| Editor | Create and change flags in `dev` / `staging` |
+| Editor | Create and change flags in `dev` / `staging`, request changes in `prod`, and turn `prod` flags off |
 | Approver | Approve or reject `prod` change requests |
 | Admin | Manage users, roles, environments, and steward assignments |
 
 Roles are cumulative: each includes the permissions of the roles above it in the table. Permissions are enforced on the server for every request, never only in the UI. Self-approval is blocked.
 
-`prod` is a **protected** environment. Until the approval workflow ships, only admins can change flags in protected environments or archive flags.
+`prod` is a **protected** environment; admins can protect others. Only admins can archive flags.
+
+### Production approvals
+
+A change to a protected environment is a **change request** that someone else approves:
+
+1. An editor requests the new settings, with an optional reason: **Request change** in the dashboard, `stew rollout … prod`, or `POST /api/v1/flags/{key}/environments/prod/requests`.
+2. The flag's steward, an approver, or an admin approves or rejects it, optionally with a comment. The requester can't review their own request, but can cancel it.
+3. Approving applies the change, but only if `prod` still has the settings the request was based on. If someone changed it in the meantime, the approval fails and the request needs to be made again.
+
+Requests that nobody reviews expire after 7 days, and only one request per flag and environment can be pending at a time.
+
+Two changes skip approval:
+
+- **The kill switch:** anyone who can edit can turn a flag off in `prod` right away, as long as nothing else changes.
+- **Emergency changes:** an admin can apply any change directly by giving a reason (`"reason"` in the API, `--emergency` in `stew`). The reason is kept in the audit log.
+
+Every request, review, and change is recorded in the flag's history.
 
 ---
 
@@ -239,6 +262,7 @@ extensions/vscode/   VS Code extension
 - **The CLI, dashboard, and extension are all API clients.** Every rule lives in the server, so no client can bypass approvals.
 - **Storage sits behind interfaces**, so business logic is tested against in-memory fakes.
 - **State-changing requests accept an idempotency key**, so retries can't apply a change twice.
+- **An approval applies only to the settings it was requested against.** Approving checks and changes `prod` in one transaction, so an approval can't overwrite a newer change.
 
 ---
 
@@ -260,7 +284,7 @@ CI runs `go vet`, unit and integration tests, `govulncheck` and `npm audit`, a s
 2. ✅ Auth, RBAC, and audit log
 3. ✅ Stewards + `stew` CLI
 4. ✅ Dashboard
-5. Approvals for production
+5. ✅ Approvals for production
 6. Redis cache + rate limiting
 7. Stale-flag detection
 8. VS Code extension
