@@ -117,9 +117,13 @@ function provideCompletionItems(doc: vscode.TextDocument, pos: vscode.Position):
   const open = openStringAt(doc.lineAt(pos.line).text, pos.character);
   if (!open || flags.size === 0) return undefined;
   const range = new vscode.Range(pos.line, open.start, pos.line, open.end);
+  // When the string already holds a flag key, offer every flag to swap it
+  // for, instead of filtering down to the key that's already there.
+  const swap = flags.has(open.text);
   return [...flags.values()].map((f) => {
     const item = new vscode.CompletionItem({ label: f.key, description: f.name }, vscode.CompletionItemKind.Constant);
     item.range = range;
+    if (swap) item.filterText = open.text;
     item.detail = f.steward ? `Steward: @${f.steward}` : "No steward";
     item.documentation = describe(f);
     if (f.stale) {

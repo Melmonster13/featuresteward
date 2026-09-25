@@ -9,13 +9,14 @@ function at(text: string) {
 
 describe("openStringAt", () => {
   it("finds an empty string just opened", () => {
-    expect(at(`flags.enabled("|`)).toEqual({ start: 15, end: 15, prefix: "" });
-    expect(at(`flags.enabled('|')`)).toEqual({ start: 15, end: 15, prefix: "" });
-    expect(at("flags.enabled(`|`)")).toEqual({ start: 15, end: 15, prefix: "" });
+    const empty = { start: 15, end: 15, prefix: "", text: "" };
+    expect(at(`flags.enabled("|`)).toEqual(empty);
+    expect(at(`flags.enabled('|')`)).toEqual(empty);
+    expect(at("flags.enabled(`|`)")).toEqual(empty);
   });
 
   it("returns what's typed so far, and the rest of the key after the cursor", () => {
-    expect(at(`enabled("new-ch|eckout")`)).toEqual({ start: 9, end: 21, prefix: "new-ch" });
+    expect(at(`enabled("new-ch|eckout")`)).toEqual({ start: 9, end: 21, prefix: "new-ch", text: "new-checkout" });
   });
 
   it("finds the second string on a line", () => {

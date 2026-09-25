@@ -7,6 +7,8 @@ export interface OpenString {
   start: number;
   end: number;
   prefix: string;
+  // text is the whole key-shaped text around the cursor.
+  text: string;
 }
 
 // openStringAt returns the string literal the cursor at column ch is
@@ -28,5 +30,5 @@ export function openStringAt(line: string, ch: number): OpenString | undefined {
   const prefix = line.slice(start, ch);
   if (!/^[a-z0-9-]*$/.test(prefix)) return undefined;
   const rest = /^[a-z0-9-]*/.exec(line.slice(ch))![0];
-  return { start, end: ch + rest.length, prefix };
+  return { start, end: ch + rest.length, prefix, text: prefix + rest };
 }
