@@ -231,7 +231,7 @@ Every request, review, and change is recorded in the flag's history.
 | `DATABASE_URL` | PostgreSQL connection string | — |
 | `REDIS_URL` | Redis connection string. Optional: without it, or while Redis is down, evaluations aren't cached or rate limited. `/healthz` reports its status. | — |
 | `PORT` | API port | `8080` |
-| `CACHE_TTL_SECONDS` | How long an evaluation stays cached. Changes clear it right away; this only bounds how stale it can get if Redis misses a change. `0` turns the cache off. | `30` |
+| `CACHE_TTL_SECONDS` | How long evaluations and SDK key lookups stay cached. Changes clear it right away; this only bounds how stale it can get if Redis misses a change. `0` turns the cache off. | `30` |
 | `RATE_LIMIT_PER_MIN` | Evaluations per minute for each SDK key or user. Over it, `/evaluate` returns `429` with `Retry-After`; every response has `RateLimit-*` headers. `0` turns it off. Needs Redis. | `600` |
 | `STALE_AFTER_DAYS` | Days a flag can sit unchanged at 0% or 100% before it's flagged stale | `30` |
 
@@ -249,7 +249,7 @@ internal/audit/        append-only audit events
 internal/auth/         users, tokens, SDK keys, sessions, and roles
 internal/idempotency/  Idempotency-Key storage
 internal/store/        PostgreSQL implementations
-internal/cache/        Redis cache in front of flag evaluation
+internal/cache/        Redis cache for flag evaluation and SDK keys
 internal/ratelimit/    per-client rate limits in Redis
 internal/redisguard/   fallback when Redis is down
 internal/httpapi/      routes, handlers, and middleware
@@ -266,6 +266,7 @@ The VS Code extension will live in `extensions/vscode/` (Milestone 8).
 
 - **Postgres is the source of truth; Redis is only a cache.** If Redis goes down, evaluation reads the database and rate limits are skipped. After a Redis failure the server leaves Redis alone for 5 seconds, so an outage doesn't add a timeout to every request.
 - **Changes clear the cache right after they're saved**, and again a second later in case a read raced the change, so the kill switch and approvals take effect on the next evaluation. The TTL only bounds staleness when Redis misses a change, for example during an outage.
+- **SDK key lookups are cached too, and revoking any key clears them all**, right away and again a second later, so a revoked key stops working on its next request. If Redis can't be cleared during a revoke, the server clears it before using it again; another server sharing that Redis could accept the revoked key for at most `CACHE_TTL_SECONDS`. Failed lookups are never cached, so random keys can't fill Redis, and Redis stores a hash of each key, never the key.
 - **Rate limits count per SDK key or user, not per IP address**, so they work the same behind a proxy. Keys in Redis hold a hash of the SDK key, never the key itself.
 - **The audit log is append-only.** Events are never updated or deleted.
 - **The CLI, dashboard, and extension are all API clients.** Every rule lives in the server, so no client can bypass approvals.
@@ -297,10 +298,10 @@ On a MacBook Pro with Postgres and Redis in Docker, 32 concurrent clients, rate 
 
 | | Evaluations/s | p50 | p99 | Database transactions per evaluation |
 |---|---|---|---|---|
-| Cache off | 9,744 | 3.2 ms | 5.2 ms | 2.0 |
-| Cache on | 14,661 | 2.1 ms | 3.6 ms | 1.0 |
+| Cache off | 9,656 | 3.3 ms | 5.2 ms | 2 |
+| Cache on | 19,121 | 1.6 ms | 2.9 ms | 0 |
 
-The remaining database transaction is SDK key authentication. These numbers come from one laptop running everything, so treat them as a comparison, not a capacity estimate.
+With the cache on, an evaluation reads neither the flag nor the SDK key from Postgres. These numbers come from one laptop running everything, so treat them as a comparison, not a capacity estimate.
 
 ---
 

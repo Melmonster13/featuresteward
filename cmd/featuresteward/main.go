@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Melmonster13/featuresteward/internal/auth"
 	"github.com/Melmonster13/featuresteward/internal/cache"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/httpapi"
@@ -80,9 +81,11 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	var flags flag.Store = db
+	var users auth.Store = db
 	switch {
 	case rdb != nil && ttl > 0:
 		flags = cache.New(db, rdb, ttl, log)
+		users = cache.NewAuth(db, rdb, ttl, log)
 	case rdb != nil:
 		log.Info("CACHE_TTL_SECONDS is 0; evaluations aren't cached")
 	}
@@ -97,7 +100,7 @@ func run(log *slog.Logger) error {
 	case rdb != nil:
 		log.Info("RATE_LIMIT_PER_MIN is 0; evaluations aren't rate limited")
 	}
-	api := httpapi.NewRouter(flags, db, db, log, opts...)
+	api := httpapi.NewRouter(flags, users, db, log, opts...)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api)
 	mux.Handle("/healthz", api)
