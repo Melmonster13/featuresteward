@@ -1,6 +1,6 @@
 import { ApiError, type ChangeRequest, type Environment } from "./api";
 import { h } from "./dom";
-import { canReview, describeConfig, envState, flagHash } from "./format";
+import { canReview, describeConfig, flagHash, stateLabel } from "./format";
 import type { App } from "./main";
 import { confirmButton, formatTime } from "./ui";
 
@@ -30,7 +30,7 @@ export function requestCard(
     const approve = h("button", { type: "button" }, "Approve");
     const reject = h("button", { type: "button", class: "secondary" }, "Reject");
     approve.addEventListener("click", () =>
-      act(() => app.api.approve(r.id, comment.value.trim()), () => `Approved request #${r.id}. ${r.flag} in ${env} is now ${envState(r.proposed).label}.`),
+      act(() => app.api.approve(r.id, comment.value.trim()), () => `Approved request #${r.id}. ${r.flag} in ${env} is now ${stateLabel(r.proposed)}.`),
     );
     reject.addEventListener("click", () =>
       act(() => app.api.reject(r.id, comment.value.trim()), () => `Rejected request #${r.id}.`),

@@ -31,14 +31,21 @@ Usage:
                                             create a flag (off everywhere)
   stew toggle <flag> <env> on|off           turn a flag on or off
   stew rollout <flag> <env> <percent>       set the percentage rollout
+      In a protected environment (prod), toggle and rollout file a change
+      request (--reason <text> tells the reviewer why), except turning a
+      flag off. Admins can apply a change now with --emergency <reason>.
+  stew requests [--all] [--flag <flag>]     list pending change requests
+  stew approve <id> [--comment <text>]      approve a request (steward, approver, admin)
+  stew reject <id> [--comment <text>]       reject a request
+  stew cancel <id>                          withdraw your own request
   stew steward <flag> <handle>              reassign the flag's steward
   stew archive <flag> --yes                 archive a flag (admins only)
   stew version                              show the stew version
 
-whoami, list, status, create, toggle, rollout, and steward take --json.
+Every command that prints something takes --json.
 
 Exit codes: 0 ok, 1 error, 2 bad usage, 3 not logged in or not allowed,
-4 flag or environment not found.
+4 flag, environment, or request not found.
 
 Environment: STEW_URL and STEW_TOKEN override the saved login.
 `
@@ -103,17 +110,21 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 		return exitOK
 	}
 	commands := map[string]func(*env, []string) error{
-		"login":   cmdLogin,
-		"logout":  cmdLogout,
-		"whoami":  cmdWhoami,
-		"list":    cmdList,
-		"status":  cmdStatus,
-		"create":  cmdCreate,
-		"toggle":  cmdToggle,
-		"rollout": cmdRollout,
-		"steward": cmdSteward,
-		"archive": cmdArchive,
-		"version": cmdVersion,
+		"login":    cmdLogin,
+		"logout":   cmdLogout,
+		"whoami":   cmdWhoami,
+		"list":     cmdList,
+		"status":   cmdStatus,
+		"create":   cmdCreate,
+		"toggle":   cmdToggle,
+		"rollout":  cmdRollout,
+		"steward":  cmdSteward,
+		"archive":  cmdArchive,
+		"version":  cmdVersion,
+		"requests": cmdRequests,
+		"approve":  cmdApprove,
+		"reject":   cmdReject,
+		"cancel":   cmdCancel,
 	}
 	cmd, ok := commands[args[0]]
 	if !ok {

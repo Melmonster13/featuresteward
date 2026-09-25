@@ -32,7 +32,10 @@ export function canReview(user: User, request: ChangeRequest, steward: string | 
 
 // describeConfig spells out a config, e.g. "On at 25%; group in [staff] → on".
 export function describeConfig(cfg: EnvConfig): string {
-  if (!cfg.enabled) return "Off";
+  if (!cfg.enabled) {
+    const on = describeConfig({ ...cfg, enabled: true });
+    return on === "On at 100%" ? "Off" : `Off; when on: ${on.replace(/^On at /, "")}`;
+  }
   const parts = [`On at ${cfg.rollout_percentage}%`];
   for (const r of cfg.rules ?? []) {
     parts.push(`${r.attribute === "user_id" ? "user ID" : "group"} in [${r.values.join(", ")}] → ${r.serve ? "on" : "off"}`);
@@ -47,6 +50,15 @@ export function envState(cfg: EnvConfig | undefined): { label: string; kind: "of
   const rules = cfg.rules?.length ?? 0;
   if (rules > 0) label += ` +${rules} rule${rules > 1 ? "s" : ""}`;
   return { label, kind: cfg.rollout_percentage < 100 ? "partial" : "on" };
+}
+
+// stateLabel is envState's label, plus what an off flag would serve once
+// turned on, so a change to an off flag is visible: "Off (30% when on)".
+export function stateLabel(cfg: EnvConfig): string {
+  const s = envState(cfg).label;
+  if (cfg.enabled) return s;
+  const on = envState({ ...cfg, enabled: true }).label;
+  return on === "On" ? s : `Off (${on} when on)`;
 }
 
 export function matchesSearch(flag: Flag, query: string): boolean {
@@ -176,8 +188,8 @@ export function describeEvent(e: AuditEvent, envName: (key: string) => string): 
     }
     case "flag.environment_updated": {
       const name = envName(e.environment ?? "");
-      const from = envState(before as unknown as EnvConfig).label;
-      const to = envState(after as unknown as EnvConfig).label;
+      const from = stateLabel(before as unknown as EnvConfig);
+      const to = stateLabel(after as unknown as EnvConfig);
       const what = from !== to ? `changed ${name} from ${from} to ${to}` : `changed the targeting rules in ${name}`;
       const reason = after.emergency_reason;
       return typeof reason === "string" ? `made an emergency change: ${what} (“${reason}”)` : what;
@@ -189,7 +201,7 @@ export function describeEvent(e: AuditEvent, envName: (key: string) => string): 
     case "change_request.expired": {
       const id = after.id;
       const name = envName(e.environment ?? "");
-      const to = envState(after.proposed as EnvConfig).label;
+      const to = stateLabel(after.proposed as EnvConfig);
       const comment = typeof after.comment === "string" && after.comment ? ` (“${after.comment}”)` : "";
       switch (e.action) {
         case "change_request.created":

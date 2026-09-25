@@ -304,8 +304,11 @@ func TestFlagCommandPermissions(t *testing.T) {
 	h.env["STEW_TOKEN"] = h.token("sam", auth.RoleEditor)
 
 	h.mustStew("", "toggle", "dark-mode", "dev", "on")
-	if code, _, errOut := h.stew("", "toggle", "dark-mode", "prod", "on"); code != 3 || !strings.Contains(errOut, "change request") {
-		t.Errorf("editor toggling prod = %d %q", code, errOut)
+	if out := h.mustStew("", "toggle", "dark-mode", "prod", "on"); !strings.Contains(out, "Requested #1: dark-mode in prod → on.") {
+		t.Errorf("editor toggling prod = %q", out)
+	}
+	if code, _, errOut := h.stew("", "rollout", "dark-mode", "prod", "5", "--emergency", "outage"); code != 3 || !strings.Contains(errOut, "change request") {
+		t.Errorf("editor emergency = %d %q", code, errOut)
 	}
 	if code, _, errOut := h.stew("", "steward", "dark-mode", "sam"); code != 3 || !strings.Contains(errOut, "current steward") {
 		t.Errorf("editor taking a flag = %d %q", code, errOut)
@@ -408,5 +411,94 @@ func TestExitCodes(t *testing.T) {
 		if code, _, errOut := h.stew("", c.args...); code != c.want {
 			t.Errorf("stew %v = %d, want %d (%s)", c.args, code, c.want, errOut)
 		}
+	}
+}
+
+func TestProdChangesNeedApproval(t *testing.T) {
+	h := newHarness(t)
+	admin := h.token("mel", auth.RoleAdmin)
+	sam := h.token("sam", auth.RoleEditor)
+	ana := h.token("ana", auth.RoleApprover)
+	h.api(admin, "POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout","steward":"sam"}`)
+	h.env["STEW_URL"] = h.url
+	as := func(token string) { h.env["STEW_TOKEN"] = token }
+
+	as(sam)
+	out := h.mustStew("", "rollout", "new-checkout", "prod", "25", "--reason", "launch to a quarter")
+	if !strings.Contains(out, "Requested #1: new-checkout in prod → off (25% when on).") || !strings.Contains(out, "stew requests") {
+		t.Errorf("rollout = %q", out)
+	}
+	h.stew("", "cancel", "1")
+	out = h.mustStew("", "toggle", "new-checkout", "prod", "on", "--reason", "launch")
+	if !strings.Contains(out, "Requested #2: new-checkout in prod → on.") {
+		t.Errorf("toggle = %q", out)
+	}
+	if status := h.mustStew("", "status", "new-checkout"); !strings.Contains(status, "prod (protected)  off") {
+		t.Errorf("a request changed prod:\n%s", status)
+	}
+	if list := h.mustStew("", "requests"); !strings.Contains(list, "2   new-checkout  prod  @sam  off → on  pending  cancel") {
+		t.Errorf("sam's requests =\n%s", list)
+	}
+	// Nobody approves their own request, even the steward.
+	if code, _, errOut := h.stew("", "approve", "2"); code != 3 || !strings.Contains(errOut, "your own") {
+		t.Errorf("self-approve = %d %q", code, errOut)
+	}
+
+	as(ana)
+	if list := h.mustStew("", "requests"); !strings.Contains(list, "pending  review") {
+		t.Errorf("ana's requests =\n%s", list)
+	}
+	if out := h.mustStew("", "approve", "#2", "--comment", "ship it"); out != "Approved #2: new-checkout in prod is now on.\n" {
+		t.Errorf("approve = %q", out)
+	}
+	if code, _, errOut := h.stew("", "approve", "2"); code != 1 || !strings.Contains(errOut, "already approved") {
+		t.Errorf("approve twice = %d %q", code, errOut)
+	}
+	if _, _, errOut := h.stew("", "requests"); !strings.Contains(errOut, "No pending change requests.") {
+		t.Errorf("empty requests = %q", errOut)
+	}
+	var all struct {
+		Requests []client.ChangeRequest `json:"requests"`
+	}
+	json.Unmarshal([]byte(h.mustStew("", "requests", "--all", "--json")), &all)
+	if len(all.Requests) != 2 || all.Requests[0].Status != "approved" || all.Requests[0].ReviewComment != "ship it" ||
+		all.Requests[1].Status != "cancelled" {
+		t.Errorf("all requests = %+v", all.Requests)
+	}
+
+	// Turning prod off is immediate for editors.
+	as(sam)
+	if out := h.mustStew("", "toggle", "new-checkout", "prod", "off"); out != "new-checkout in prod: off\n" {
+		t.Errorf("kill switch = %q", out)
+	}
+	// Admins can apply an emergency change.
+	as(admin)
+	if out := h.mustStew("", "rollout", "new-checkout", "prod", "5", "--emergency", "outage"); out != "new-checkout in prod: off\n" {
+		t.Errorf("emergency = %q", out)
+	}
+	if out := h.mustStew("", "toggle", "new-checkout", "prod", "on", "--emergency", "outage"); out != "new-checkout in prod: 5%\n" {
+		t.Errorf("emergency toggle = %q", out)
+	}
+
+	// Rejecting leaves prod alone.
+	as(sam)
+	h.mustStew("", "rollout", "new-checkout", "prod", "50")
+	as(ana)
+	if out := h.mustStew("", "reject", "3", "--comment", "not yet"); out != "Rejected #3. new-checkout in prod stays 5%.\n" {
+		t.Errorf("reject = %q", out)
+	}
+}
+
+func TestRequestCommandErrors(t *testing.T) {
+	h := newHarness(t)
+	h.env["STEW_URL"] = h.url
+	h.env["STEW_TOKEN"] = h.token("ana", auth.RoleApprover)
+	for _, args := range [][]string{{"approve"}, {"approve", "abc"}, {"reject", "0"}, {"cancel", "1", "2"}, {"requests", "extra"}} {
+		if code, _, _ := h.stew("", args...); code != 2 {
+			t.Errorf("stew %v = %d, want 2", args, code)
+		}
+	}
+	if code, _, errOut := h.stew("", "approve", "99"); code != 4 || !strings.Contains(errOut, "request #99 not found") {
+		t.Errorf("unknown request = %d %q", code, errOut)
 	}
 }

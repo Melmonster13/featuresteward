@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEvent, Flag } from "./api";
 import {
-  atLeast, canReview, describeConfig, describeEvent, expiryDate, isKillSwitch, lockReason, tokenStatus, userHash, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
+  atLeast, canReview, describeConfig, stateLabel, describeEvent, expiryDate, isKillSwitch, lockReason, tokenStatus, userHash, envState, flagHash, flagsHash, matchesSearch, parseRoute, parseValues, sameConfig, validKey,
 } from "./format";
 
 describe("atLeast", () => {
@@ -156,11 +156,24 @@ describe("approvals", () => {
   });
 
   it("describes configs", () => {
-    expect(describeConfig({ enabled: false, rollout_percentage: 25, rules: [rule] })).toBe("Off");
+    expect(describeConfig({ enabled: false, rollout_percentage: 100, rules: [] })).toBe("Off");
+    expect(describeConfig({ enabled: false, rollout_percentage: 25, rules: [rule] })).toBe("Off; when on: 25%; group in [staff] → on");
     expect(describeConfig(on)).toBe("On at 25%; group in [staff] → on");
     expect(describeConfig({ enabled: true, rollout_percentage: 100, rules: [{ attribute: "user_id", values: ["u1", "u2"], serve: false }] })).toBe(
       "On at 100%; user ID in [u1, u2] → off",
     );
+  });
+
+  it("shows what an off flag would serve", () => {
+    expect(stateLabel({ enabled: false, rollout_percentage: 100, rules: [] })).toBe("Off");
+    expect(stateLabel({ enabled: false, rollout_percentage: 30, rules: [] })).toBe("Off (30% when on)");
+    expect(stateLabel({ enabled: true, rollout_percentage: 30, rules: [] })).toBe("30%");
+    const env = (k: string) => k;
+    const ev: AuditEvent = {
+      id: 1, occurred_at: "", actor: "sam", action: "flag.environment_updated", environment: "dev",
+      before: { enabled: false, rollout_percentage: 100, rules: [] }, after: { enabled: false, rollout_percentage: 30, rules: [] },
+    };
+    expect(describeEvent(ev, env)).toBe("changed dev from Off to Off (30% when on)");
   });
 
   it("describes request and emergency events", () => {

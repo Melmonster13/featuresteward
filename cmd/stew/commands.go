@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -192,6 +194,19 @@ func state(c client.EnvConfig) string {
 	return s
 }
 
+// detail is like state, but also says what an off flag would serve once
+// turned on, so a change to an off flag is visible: "off (30% when on)".
+func detail(c client.EnvConfig) string {
+	if c.Enabled {
+		return state(c)
+	}
+	c.Enabled = true
+	if on := state(c); on != "on" {
+		return "off (" + on + " when on)"
+	}
+	return "off"
+}
+
 func stewardName(s *string) string {
 	if s == nil {
 		return "(none)"
@@ -298,9 +313,23 @@ func cmdCreate(e *env, args []string) error {
 	return nil
 }
 
+// changeOpts are the flags shared by toggle and rollout.
+type changeOpts struct {
+	asJSON            *bool
+	reason, emergency *string
+}
+
+func changeFlags(fs *flag.FlagSet) changeOpts {
+	return changeOpts{
+		asJSON:    fs.Bool("json", false, "print the updated flag, or the new change request, as JSON"),
+		reason:    fs.String("reason", "", "why, for the reviewer of a change request"),
+		emergency: fs.String("emergency", "", "admins: apply a protected-environment change now, for this reason"),
+	}
+}
+
 func cmdToggle(e *env, args []string) error {
 	fs := e.flags("toggle")
-	asJSON := fs.Bool("json", false, "print the updated flag as JSON")
+	opts := changeFlags(fs)
 	pos, err := e.parseArgs(fs, args, "flag", "env", "on|off")
 	if err != nil {
 		return err
@@ -314,12 +343,12 @@ func cmdToggle(e *env, args []string) error {
 		fmt.Fprintf(e.stderr, "stew toggle: expected on or off, got %q\n", pos[2])
 		return errUsage
 	}
-	return updateEnv(e, *asJSON, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.Enabled = on })
+	return updateEnv(e, opts, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.Enabled = on })
 }
 
 func cmdRollout(e *env, args []string) error {
 	fs := e.flags("rollout")
-	asJSON := fs.Bool("json", false, "print the updated flag as JSON")
+	opts := changeFlags(fs)
 	pos, err := e.parseArgs(fs, args, "flag", "env", "percent")
 	if err != nil {
 		return err
@@ -329,12 +358,14 @@ func cmdRollout(e *env, args []string) error {
 		fmt.Fprintf(e.stderr, "stew rollout: percent must be a whole number 0-100, got %q\n", pos[2])
 		return errUsage
 	}
-	return updateEnv(e, *asJSON, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.RolloutPercentage = pct })
+	return updateEnv(e, opts, pos[0], pos[1], func(cfg *client.EnvConfig) { cfg.RolloutPercentage = pct })
 }
 
 // updateEnv changes one field of a flag's environment config and keeps
-// the rest, since the API replaces the whole config.
-func updateEnv(e *env, asJSON bool, key, envKey string, change func(*client.EnvConfig)) error {
+// the rest, since the API replaces the whole config. In a protected
+// environment it files a change request instead, unless the change only
+// turns the flag off or is an admin's emergency.
+func updateEnv(e *env, o changeOpts, key, envKey string, change func(*client.EnvConfig)) error {
 	c, _, err := e.client()
 	if err != nil {
 		return err
@@ -343,17 +374,42 @@ func updateEnv(e *env, asJSON bool, key, envKey string, change func(*client.EnvC
 	if err != nil {
 		return flagErr(err, key)
 	}
-	cfg, ok := f.Environments[envKey]
+	cur, ok := f.Environments[envKey]
 	if !ok {
 		return notFound("unknown environment %q", envKey)
 	}
+	envs, err := c.ListEnvironments(e.ctx)
+	if err != nil {
+		return err
+	}
+	protected := false
+	for _, en := range envs {
+		protected = protected || (en.Key == envKey && en.Protected)
+	}
+	cfg := cur
 	change(&cfg)
-	f, err = c.SetEnvironment(e.ctx, key, envKey, cfg)
+	emergency := strings.TrimSpace(*o.emergency)
+	if protected && emergency == "" && !killSwitch(cur, cfg) {
+		r, err := c.RequestChange(e.ctx, key, envKey, cfg, strings.TrimSpace(*o.reason))
+		if err != nil {
+			return flagErr(err, key)
+		}
+		if *o.asJSON {
+			return e.writeJSON(r)
+		}
+		fmt.Fprintf(e.stdout, "Requested #%d: %s in %s → %s.\n", r.ID, key, envKey, detail(r.Proposed))
+		fmt.Fprintf(e.stdout, "It changes once the steward or an approver approves it. See: stew requests\n")
+		return nil
+	}
+	if !protected {
+		emergency = "" // only protected environments take a reason
+	}
+	f, err = c.SetEnvironment(e.ctx, key, envKey, cfg, emergency)
 	if err != nil {
 		return err
 	}
 	cfg = f.Environments[envKey]
-	if asJSON {
+	if *o.asJSON {
 		if err := e.writeJSON(f); err != nil {
 			return err
 		}
@@ -431,4 +487,171 @@ func cmdVersion(e *env, args []string) error {
 	}
 	fmt.Fprintln(e.stdout, "stew", v)
 	return nil
+}
+
+// killSwitch reports whether next only turns the flag off, which
+// protected environments allow without approval.
+func killSwitch(cur, next client.EnvConfig) bool {
+	cur.Enabled = false
+	return !next.Enabled && next.RolloutPercentage == cur.RolloutPercentage && reflect.DeepEqual(rulesOf(next), rulesOf(cur))
+}
+
+func rulesOf(c client.EnvConfig) []client.Rule {
+	if len(c.Rules) == 0 {
+		return nil
+	}
+	return c.Rules
+}
+
+func cmdRequests(e *env, args []string) error {
+	fs := e.flags("requests")
+	all := fs.Bool("all", false, "include approved, rejected, cancelled, and expired requests")
+	flagKey := fs.String("flag", "", "only requests for this flag")
+	asJSON := fs.Bool("json", false, "print JSON")
+	if err := e.parse(fs, args); err != nil {
+		return err
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	status := "pending"
+	if *all {
+		status = ""
+	}
+	rs, err := c.Requests(e.ctx, status, *flagKey)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		if rs == nil {
+			rs = []client.ChangeRequest{}
+		}
+		return e.writeJSON(map[string]any{"requests": rs})
+	}
+	if len(rs) == 0 {
+		if *all {
+			fmt.Fprintln(e.stderr, "No change requests.")
+		} else {
+			fmt.Fprintln(e.stderr, "No pending change requests.")
+		}
+		return nil
+	}
+	me, err := c.Me(e.ctx)
+	if err != nil {
+		return err
+	}
+	flags, err := c.ListFlags(e.ctx, "")
+	if err != nil {
+		return err
+	}
+	stewards := map[string]string{}
+	for _, f := range flags {
+		if f.Steward != nil {
+			stewards[f.Key] = *f.Steward
+		}
+	}
+	tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tFLAG\tENV\tBY\tCHANGE\tSTATUS\tYOU CAN")
+	for _, r := range rs {
+		you := ""
+		switch {
+		case r.Status != "pending":
+		case r.RequestedBy == me.Handle:
+			you = "cancel"
+		case me.Role == "approver" || me.Role == "admin" || stewards[r.Flag] == me.Handle:
+			you = "review"
+		}
+		fmt.Fprintf(tw, "%d\t%s\t%s\t@%s\t%s → %s\t%s\t%s\n",
+			r.ID, r.Flag, r.Environment, r.RequestedBy, detail(r.Base), detail(r.Proposed), r.Status, you)
+	}
+	return tw.Flush()
+}
+
+func cmdApprove(e *env, args []string) error {
+	return review(e, "approve", args, func(c *client.Client, id int64, comment string) (client.ChangeRequest, error) {
+		return c.Approve(e.ctx, id, comment)
+	})
+}
+
+func cmdReject(e *env, args []string) error {
+	return review(e, "reject", args, func(c *client.Client, id int64, comment string) (client.ChangeRequest, error) {
+		return c.Reject(e.ctx, id, comment)
+	})
+}
+
+func review(e *env, name string, args []string, act func(*client.Client, int64, string) (client.ChangeRequest, error)) error {
+	fs := e.flags(name)
+	comment := fs.String("comment", "", "a note for the requester")
+	asJSON := fs.Bool("json", false, "print the request as JSON")
+	pos, err := e.parseArgs(fs, args, "id")
+	if err != nil {
+		return err
+	}
+	id, err := requestID(e, name, pos[0])
+	if err != nil {
+		return err
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	r, err := act(c, id, strings.TrimSpace(*comment))
+	if err != nil {
+		return requestErr(err, id)
+	}
+	if *asJSON {
+		return e.writeJSON(r)
+	}
+	if r.Status == "approved" {
+		fmt.Fprintf(e.stdout, "Approved #%d: %s in %s is now %s.\n", r.ID, r.Flag, r.Environment, detail(r.Proposed))
+	} else {
+		fmt.Fprintf(e.stdout, "Rejected #%d. %s in %s stays %s.\n", r.ID, r.Flag, r.Environment, detail(r.Base))
+	}
+	return nil
+}
+
+func cmdCancel(e *env, args []string) error {
+	fs := e.flags("cancel")
+	asJSON := fs.Bool("json", false, "print the request as JSON")
+	pos, err := e.parseArgs(fs, args, "id")
+	if err != nil {
+		return err
+	}
+	id, err := requestID(e, "cancel", pos[0])
+	if err != nil {
+		return err
+	}
+	c, _, err := e.client()
+	if err != nil {
+		return err
+	}
+	r, err := c.Cancel(e.ctx, id)
+	if err != nil {
+		return requestErr(err, id)
+	}
+	if *asJSON {
+		return e.writeJSON(r)
+	}
+	fmt.Fprintf(e.stdout, "Cancelled #%d.\n", r.ID)
+	return nil
+}
+
+// requestID accepts 12 or #12.
+func requestID(e *env, cmd, arg string) (int64, error) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(arg, "#"), 10, 64)
+	if err != nil || id <= 0 {
+		fmt.Fprintf(e.stderr, "stew %s: expected a request ID like 12, got %q\n", cmd, arg)
+		return 0, errUsage
+	}
+	return id, nil
+}
+
+// requestErr names the request when the API says it doesn't exist.
+func requestErr(err error, id int64) error {
+	var ae *client.APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return notFound("request #%d not found", id)
+	}
+	return err
 }

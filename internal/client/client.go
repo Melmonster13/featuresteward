@@ -143,14 +143,95 @@ func (c *Client) CreateFlag(ctx context.Context, key, name, description, steward
 	return f, err
 }
 
-// SetEnvironment replaces a flag's whole config in one environment.
-func (c *Client) SetEnvironment(ctx context.Context, key, env string, cfg EnvConfig) (Flag, error) {
+// SetEnvironment replaces a flag's whole config in one environment. In a
+// protected environment, a reason makes it an admin's emergency change.
+func (c *Client) SetEnvironment(ctx context.Context, key, env string, cfg EnvConfig, reason string) (Flag, error) {
+	var f Flag
+	err := c.do(ctx, http.MethodPut, envPath(key, env), withReason{normalize(cfg), reason}, &f)
+	return f, err
+}
+
+// ChangeRequest proposes a config for a flag in a protected environment.
+type ChangeRequest struct {
+	ID            int64      `json:"id"`
+	Flag          string     `json:"flag"`
+	Environment   string     `json:"environment"`
+	RequestedBy   string     `json:"requested_by"`
+	Reason        string     `json:"reason"`
+	Base          EnvConfig  `json:"base"`
+	Proposed      EnvConfig  `json:"proposed"`
+	Status        string     `json:"status"`
+	ReviewedBy    *string    `json:"reviewed_by"`
+	ReviewComment string     `json:"review_comment"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ExpiresAt     time.Time  `json:"expires_at"`
+	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
+}
+
+// RequestChange asks for cfg in a protected environment; a reviewer
+// applies it by approving.
+func (c *Client) RequestChange(ctx context.Context, key, env string, cfg EnvConfig, reason string) (ChangeRequest, error) {
+	var r ChangeRequest
+	err := c.do(ctx, http.MethodPost, envPath(key, env)+"/requests", withReason{normalize(cfg), reason}, &r)
+	return r, err
+}
+
+// Requests lists change requests, newest first. status and flag filter
+// when set.
+func (c *Client) Requests(ctx context.Context, status, flag string) ([]ChangeRequest, error) {
+	q := url.Values{}
+	if status != "" {
+		q.Set("status", status)
+	}
+	if flag != "" {
+		q.Set("flag", flag)
+	}
+	path := "/api/v1/requests"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var out struct {
+		Requests []ChangeRequest `json:"requests"`
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out.Requests, err
+}
+
+func (c *Client) Approve(ctx context.Context, id int64, comment string) (ChangeRequest, error) {
+	return c.review(ctx, id, "approve", comment)
+}
+
+func (c *Client) Reject(ctx context.Context, id int64, comment string) (ChangeRequest, error) {
+	return c.review(ctx, id, "reject", comment)
+}
+
+func (c *Client) Cancel(ctx context.Context, id int64) (ChangeRequest, error) {
+	var r ChangeRequest
+	err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/requests/%d/cancel", id), nil, &r)
+	return r, err
+}
+
+func (c *Client) review(ctx context.Context, id int64, action, comment string) (ChangeRequest, error) {
+	var r ChangeRequest
+	err := c.do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/requests/%d/%s", id, action), map[string]string{"comment": comment}, &r)
+	return r, err
+}
+
+// withReason is an EnvConfig plus the optional reason the API accepts.
+type withReason struct {
+	EnvConfig
+	Reason string `json:"reason,omitempty"`
+}
+
+func envPath(key, env string) string {
+	return "/api/v1/flags/" + url.PathEscape(key) + "/environments/" + url.PathEscape(env)
+}
+
+func normalize(cfg EnvConfig) EnvConfig {
 	if cfg.Rules == nil {
 		cfg.Rules = []Rule{}
 	}
-	var f Flag
-	err := c.do(ctx, http.MethodPut, "/api/v1/flags/"+url.PathEscape(key)+"/environments/"+url.PathEscape(env), cfg, &f)
-	return f, err
+	return cfg
 }
 
 func (c *Client) SetSteward(ctx context.Context, key, steward string) (Flag, error) {
