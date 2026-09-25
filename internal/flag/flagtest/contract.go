@@ -433,6 +433,7 @@ func RunContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		}
 	})
 	runRequestContract(t, newStore)
+	runActivityContract(t, newStore)
 }
 
 func mustCreate(t *testing.T, s flag.Store, key string) flag.Flag {

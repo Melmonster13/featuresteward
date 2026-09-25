@@ -32,6 +32,26 @@ type Flag struct {
 	UpdatedAt    time.Time
 	ArchivedAt   *time.Time
 	Environments map[string]EnvConfig
+	// Activity says when the flag last changed and was last evaluated in
+	// each environment.
+	Activity map[string]Activity
+	// PermanentReason marks a flag meant to last, such as an operations
+	// kill switch; it's never reported stale. "" means not permanent.
+	PermanentReason string
+}
+
+// Activity is a flag's recent history in one environment.
+type Activity struct {
+	ChangedAt time.Time
+	// EvaluatedAt is the last evaluation, or when tracking began if the
+	// flag hasn't been evaluated since.
+	EvaluatedAt time.Time
+}
+
+// Evaluation records that a flag was evaluated in an environment.
+type Evaluation struct {
+	Flag, Environment string
+	At                time.Time
 }
 
 // EnvConfig is a flag's state in one environment. Rules is never nil
@@ -113,6 +133,7 @@ const (
 	ActionEnvUpdated = "flag.environment_updated"
 	ActionArchived   = "flag.archived"
 	ActionSteward    = "flag.steward_changed"
+	ActionPermanent  = "flag.permanent_changed"
 
 	ActionEnvironmentCreated = "environment.created"
 	ActionEnvironmentUpdated = "environment.updated"
@@ -135,6 +156,12 @@ type Store interface {
 	UpdateEnvironment(ctx context.Context, actor, key, env string, cfg EnvConfig, reason string) (Flag, error)
 	// SetSteward assigns a non-empty steward; callers validate the handle.
 	SetSteward(ctx context.Context, actor, key, steward string) (Flag, error)
+	// SetPermanent marks a flag as meant to last, with a reason, or clears
+	// the mark when reason is "".
+	SetPermanent(ctx context.Context, actor, key, reason string) (Flag, error)
+	// RecordEvaluations notes when flags were evaluated. A time earlier
+	// than the stored one, or an unknown flag or environment, is ignored.
+	RecordEvaluations(ctx context.Context, seen []Evaluation) error
 	ArchiveFlag(ctx context.Context, actor, key string) error
 
 	// EvalConfig returns what eval.Evaluate needs for one flag in one environment.

@@ -18,6 +18,7 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/httpapi"
 	"github.com/Melmonster13/featuresteward/internal/ratelimit"
 	"github.com/Melmonster13/featuresteward/internal/store"
+	"github.com/Melmonster13/featuresteward/internal/usage"
 	"github.com/Melmonster13/featuresteward/web"
 )
 
@@ -100,6 +101,8 @@ func run(log *slog.Logger) error {
 	case rdb != nil:
 		log.Info("RATE_LIMIT_PER_MIN is 0; evaluations aren't rate limited")
 	}
+	recorder := usage.New(db, log)
+	opts = append(opts, httpapi.WithUsage(recorder.Seen))
 	api := httpapi.NewRouter(flags, users, db, log, opts...)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api)
@@ -143,6 +146,12 @@ func run(log *slog.Logger) error {
 		errc <- srv.ListenAndServe()
 	}()
 
+	recorded := make(chan struct{})
+	go func() {
+		recorder.Run(ctx, time.Minute)
+		close(recorded)
+	}()
+
 	select {
 	case err := <-errc:
 		return err
@@ -150,5 +159,7 @@ func run(log *slog.Logger) error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(shutdownCtx)
+	<-recorded // the final flush of flag usage
+	return err
 }

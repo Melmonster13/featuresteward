@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -48,9 +49,10 @@ func (m *Memory) CreateFlag(_ context.Context, actor, key, name, description, st
 	}
 	now := time.Now()
 	f := &flag.Flag{Key: key, Name: name, Description: description, Steward: steward, CreatedAt: now, UpdatedAt: now,
-		Environments: map[string]flag.EnvConfig{}}
+		Environments: map[string]flag.EnvConfig{}, Activity: map[string]flag.Activity{}}
 	for _, e := range m.envs {
 		f.Environments[e.Key] = flag.EnvConfig{RolloutPercentage: 100, Rules: []eval.Rule{}}
+		f.Activity[e.Key] = flag.Activity{ChangedAt: now, EvaluatedAt: now}
 	}
 	m.flags[key] = f
 	m.audit(actor, flag.ActionCreated, key, "", nil, flag.Meta{Key: key, Name: name, Description: description, Steward: steward})
@@ -113,6 +115,7 @@ func (m *Memory) UpdateEnvironment(_ context.Context, actor, key, env string, cf
 	}
 	f.Environments[env] = cfg
 	f.UpdatedAt = time.Now()
+	f.Activity[env] = flag.Activity{ChangedAt: f.UpdatedAt, EvaluatedAt: f.Activity[env].EvaluatedAt}
 	m.audit(actor, flag.ActionEnvUpdated, key, env, before, flag.NewEnvChange(cfg, reason))
 	return clone(f), nil
 }
@@ -190,8 +193,10 @@ func (m *Memory) CreateEnvironment(_ context.Context, actor string, env flag.Env
 	}
 	m.envs = append(m.envs, env)
 	slices.SortFunc(m.envs, func(a, b flag.Environment) int { return strings.Compare(a.Key, b.Key) })
+	now := time.Now()
 	for _, f := range m.flags {
 		f.Environments[env.Key] = flag.EnvConfig{RolloutPercentage: 100, Rules: []eval.Rule{}}
+		f.Activity[env.Key] = flag.Activity{ChangedAt: now, EvaluatedAt: now}
 	}
 	m.auditEnv(actor, flag.ActionEnvironmentCreated, env.Key, nil, env)
 	return env, nil
@@ -280,7 +285,41 @@ func clone(f *flag.Flag) flag.Flag {
 		v.Rules = cloneRules(v.Rules)
 		c.Environments[k] = v
 	}
+	c.Activity = maps.Clone(f.Activity)
 	return c
+}
+
+func (m *Memory) SetPermanent(_ context.Context, actor, key, reason string) (flag.Flag, error) {
+	reason, err := flag.ValidatePermanentReason(reason)
+	if err != nil {
+		return flag.Flag{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, err := m.active(key)
+	if err != nil {
+		return flag.Flag{}, err
+	}
+	before := f.PermanentReason
+	f.PermanentReason, f.UpdatedAt = reason, time.Now()
+	m.audit(actor, flag.ActionPermanent, key, "", flag.NewPermanentSnapshot(before), flag.NewPermanentSnapshot(reason))
+	return clone(f), nil
+}
+
+func (m *Memory) RecordEvaluations(_ context.Context, seen []flag.Evaluation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range seen {
+		f, ok := m.flags[e.Flag]
+		if !ok {
+			continue
+		}
+		if a, ok := f.Activity[e.Environment]; ok && e.At.After(a.EvaluatedAt) {
+			a.EvaluatedAt = e.At
+			f.Activity[e.Environment] = a
+		}
+	}
+	return nil
 }
 
 func cloneRules(rules []eval.Rule) []eval.Rule {

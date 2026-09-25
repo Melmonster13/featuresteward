@@ -31,6 +31,13 @@ type server struct {
 	log    *slog.Logger
 	checks []healthCheck
 	limit  RateLimiter
+	seen   func(flagKey, env string)
+}
+
+// WithUsage calls seen after each successful evaluation, to track which
+// flags are still in use.
+func WithUsage(seen func(flagKey, env string)) Option {
+	return func(s *server) { s.seen = seen }
 }
 
 // RateLimiter decides whether a client may make another evaluation.

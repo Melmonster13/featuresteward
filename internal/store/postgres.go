@@ -289,6 +289,44 @@ func lockActive(ctx context.Context, q *db.Queries, key string) (db.Flag, error)
 	return f, nil
 }
 
+func (s *Postgres) SetPermanent(ctx context.Context, actor, key, reason string) (flag.Flag, error) {
+	reason, err := flag.ValidatePermanentReason(reason)
+	if err != nil {
+		return flag.Flag{}, err
+	}
+	var out flag.Flag
+	err = s.inTx(ctx, func(q *db.Queries) error {
+		f, err := lockActive(ctx, q, key)
+		if err != nil {
+			return err
+		}
+		row, err := q.SetPermanent(ctx, db.SetPermanentParams{ID: f.ID, PermanentReason: strPtr(reason)})
+		if err != nil {
+			return err
+		}
+		if err := flagAudit(ctx, q, actor, flag.ActionPermanent, key, "",
+			flag.NewPermanentSnapshot(deref(f.PermanentReason)), flag.NewPermanentSnapshot(reason)); err != nil {
+			return err
+		}
+		out, err = load(ctx, q, row)
+		return err
+	})
+	return out, err
+}
+
+func (s *Postgres) RecordEvaluations(ctx context.Context, seen []flag.Evaluation) error {
+	if len(seen) == 0 {
+		return nil
+	}
+	p := db.RecordEvaluationsParams{
+		Keys: make([]string, len(seen)), Envs: make([]string, len(seen)), Ats: make([]pgtype.Timestamptz, len(seen)),
+	}
+	for i, e := range seen {
+		p.Keys[i], p.Envs[i], p.Ats[i] = e.Flag, e.Environment, pgtype.Timestamptz{Time: e.At, Valid: true}
+	}
+	return s.q.RecordEvaluations(ctx, p)
+}
+
 // writeEnv stores cfg for a locked flag in env and audits the change from
 // before. A non-empty reason marks an emergency change.
 func writeEnv(ctx context.Context, q *db.Queries, actor string, f db.Flag, env string, before, cfg flag.EnvConfig, reason string) error {
@@ -357,6 +395,9 @@ func toFlag(row db.Flag, envs []db.FlagEnvironment) (flag.Flag, error) {
 		UpdatedAt:    row.UpdatedAt.Time,
 		ArchivedAt:   timePtr(row.ArchivedAt),
 		Environments: make(map[string]flag.EnvConfig, len(envs)),
+		Activity:     make(map[string]flag.Activity, len(envs)),
+
+		PermanentReason: deref(row.PermanentReason),
 	}
 	for _, e := range envs {
 		cfg, err := toEnvConfig(e.Enabled, e.RolloutPercentage, e.Rules)
@@ -364,6 +405,7 @@ func toFlag(row db.Flag, envs []db.FlagEnvironment) (flag.Flag, error) {
 			return flag.Flag{}, err
 		}
 		f.Environments[e.Environment] = cfg
+		f.Activity[e.Environment] = flag.Activity{ChangedAt: e.UpdatedAt.Time, EvaluatedAt: e.LastEvaluatedAt.Time}
 	}
 	return f, nil
 }

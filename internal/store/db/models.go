@@ -56,14 +56,15 @@ type Environment struct {
 }
 
 type Flag struct {
-	ID          int64
-	Key         string
-	Name        string
-	Description string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	ArchivedAt  pgtype.Timestamptz
-	Steward     *string
+	ID              int64
+	Key             string
+	Name            string
+	Description     string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	ArchivedAt      pgtype.Timestamptz
+	Steward         *string
+	PermanentReason *string
 }
 
 type FlagEnvironment struct {
@@ -73,6 +74,7 @@ type FlagEnvironment struct {
 	RolloutPercentage int16
 	Rules             []byte
 	UpdatedAt         pgtype.Timestamptz
+	LastEvaluatedAt   pgtype.Timestamptz
 }
 
 type IdempotencyKey struct {

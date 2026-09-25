@@ -81,3 +81,18 @@ VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: ListAuditEvents :many
 SELECT * FROM audit_events WHERE flag_key = $1 ORDER BY id;
+
+-- name: SetPermanent :one
+UPDATE flags SET permanent_reason = $2, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- Keeps the latest time; unknown flags and environments match nothing.
+-- name: RecordEvaluations :exec
+UPDATE flag_environments fe
+SET last_evaluated_at = GREATEST(fe.last_evaluated_at, u.at)
+FROM (SELECT unnest(sqlc.arg(keys)::text[]) AS key,
+             unnest(sqlc.arg(envs)::text[]) AS env,
+             unnest(sqlc.arg(ats)::timestamptz[]) AS at) u,
+     flags f
+WHERE f.id = fe.flag_id AND f.key = u.key AND fe.environment = u.env;

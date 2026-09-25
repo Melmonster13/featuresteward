@@ -88,6 +88,7 @@ func (m *Memory) ApproveChangeRequest(_ context.Context, actor string, id int64,
 	}
 	f.Environments[r.Environment] = cloneConfig(r.Proposed)
 	f.UpdatedAt = time.Now()
+	f.Activity[r.Environment] = flag.Activity{ChangedAt: f.UpdatedAt, EvaluatedAt: f.Activity[r.Environment].EvaluatedAt}
 	m.audit(actor, flag.ActionEnvUpdated, r.FlagKey, r.Environment, r.Base, r.Proposed)
 	m.resolve(r, actor, flag.RequestApproved, comment, flag.ActionRequestApproved)
 	return cloneRequest(r), nil

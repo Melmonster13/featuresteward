@@ -109,3 +109,19 @@ func TestNoRateLimitHeadersWhenRedisIsDown(t *testing.T) {
 		}
 	}
 }
+
+func TestEvaluationsAreRecorded(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	flags, users, idem := flagtest.NewMemory(), authtest.NewMemory(), idemtest.NewMemory()
+	c := &client{t: t, users: users, idem: idem,
+		h: NewRouter(flags, users, idem, slog.New(slog.NewTextHandler(io.Discard, nil)),
+			WithUsage(func(k, env string) { mu.Lock(); seen = append(seen, k+"/"+env); mu.Unlock() }))}
+	c.token = c.newUser("mel", auth.RoleAdmin)
+	c.mustDo("POST", "/api/v1/flags", `{"key":"new-checkout","name":"New checkout"}`, 201)
+	evaluate(c)
+	c.mustDo("POST", "/api/v1/evaluate", `{"flag":"nope","environment":"prod"}`, 404)
+	if len(seen) != 1 || seen[0] != "new-checkout/prod" {
+		t.Errorf("seen = %v; unknown flags shouldn't count", seen)
+	}
+}

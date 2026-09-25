@@ -315,6 +315,9 @@ func (s *server) evaluate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if s.seen != nil {
+		s.seen(req.Flag, req.Environment)
+	}
 	res := eval.Evaluate(cfg, eval.Context{UserID: req.UserID, Groups: req.Groups})
 	writeJSON(w, http.StatusOK, map[string]any{"flag": req.Flag, "enabled": res.Enabled, "reason": res.Reason})
 }
