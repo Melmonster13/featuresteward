@@ -31,8 +31,8 @@ Most teams either pay for a hosted service or hack flags into config files with 
 - [x] Approval workflow for production changes, routed to the flag's steward
 - [ ] Stale-flag detection with steward notifications
 - [x] Append-only audit log (tamper-evident hash chain as a stretch goal)
-- [ ] Redis-backed evaluation cache
-- [ ] Rate-limited evaluation endpoint
+- [x] Redis-backed evaluation cache
+- [x] Rate-limited evaluation endpoint
 - [x] Web dashboard
 - [x] `stew` command-line tool
 - [ ] VS Code extension (hover status and steward, autocomplete flag keys, stale-flag finder)
@@ -240,24 +240,33 @@ Every request, review, and change is recorded in the flag's history.
 ## Project structure
 
 ```
-cmd/featuresteward/  API server entry point
-cmd/stew/            CLI entry point
-internal/flag/       flag domain and business logic
-internal/eval/       rule matching and rollout hashing
-internal/audit/      append-only audit events
-internal/auth/       authentication and RBAC
-internal/store/      PostgreSQL repositories
-internal/httpapi/    handlers, middleware, errors
-migrations/          versioned SQL (up/down)
-web/                 dashboard
-extensions/vscode/   VS Code extension
+cmd/featuresteward/    API server entry point
+cmd/stew/              CLI
+cmd/evalload/          evaluation load test
+internal/flag/         flags, environments, and change requests
+internal/eval/         rule matching and rollout hashing
+internal/audit/        append-only audit events
+internal/auth/         users, tokens, SDK keys, sessions, and roles
+internal/idempotency/  Idempotency-Key storage
+internal/store/        PostgreSQL implementations
+internal/cache/        Redis cache in front of flag evaluation
+internal/ratelimit/    per-client rate limits in Redis
+internal/redisguard/   fallback when Redis is down
+internal/httpapi/      routes, handlers, and middleware
+internal/client/       Go API client used by stew
+migrations/            versioned SQL (up/down)
+web/                   dashboard (TypeScript), embedded in the server
 ```
+
+The VS Code extension will live in `extensions/vscode/` (Milestone 8).
 
 ---
 
 ## Design decisions
 
-- **Postgres is the source of truth; Redis is only a cache.** If Redis goes down, evaluation falls back to the database.
+- **Postgres is the source of truth; Redis is only a cache.** If Redis goes down, evaluation reads the database and rate limits are skipped. After a Redis failure the server leaves Redis alone for 5 seconds, so an outage doesn't add a timeout to every request.
+- **Changes clear the cache right after they're saved**, and again a second later in case a read raced the change, so the kill switch and approvals take effect on the next evaluation. The TTL only bounds staleness when Redis misses a change, for example during an outage.
+- **Rate limits count per SDK key or user, not per IP address**, so they work the same behind a proxy. Keys in Redis hold a hash of the SDK key, never the key itself.
 - **The audit log is append-only.** Events are never updated or deleted.
 - **The CLI, dashboard, and extension are all API clients.** Every rule lives in the server, so no client can bypass approvals.
 - **Storage sits behind interfaces**, so business logic is tested against in-memory fakes.
@@ -269,12 +278,29 @@ extensions/vscode/   VS Code extension
 ## Testing
 
 ```bash
-make test         # unit tests
-make test-int     # integration tests (requires Docker)
+make test           # unit tests
+make test-int       # integration tests (Postgres and Redis from docker compose)
 cd web && npm test  # dashboard tests
 ```
 
-CI runs `go vet`, unit and integration tests, `govulncheck` and `npm audit`, a secret scan, the dashboard's typecheck, tests, and build, a Docker build, and a `stew` build for Linux, macOS, and Windows on every pull request.
+CI runs `go vet`, unit and integration tests against real Postgres and Redis, `govulncheck` and `npm audit`, a secret scan, the dashboard's typecheck, tests, and build, a Docker build, and a `stew` build for Linux, macOS, and Windows on every pull request.
+
+### Performance
+
+`cmd/evalload` sends evaluations as fast as it can and reports throughput and latency. The SDK key comes from an environment variable, so it stays out of your shell history:
+
+```bash
+EVALLOAD_KEY=fs_sdk_... go run ./cmd/evalload -flag new-checkout -c 32 -d 20s
+```
+
+On a MacBook Pro with Postgres and Redis in Docker, 32 concurrent clients, rate limiting off, and a flag with a rollout and one rule:
+
+| | Evaluations/s | p50 | p99 | Database transactions per evaluation |
+|---|---|---|---|---|
+| Cache off | 9,744 | 3.2 ms | 5.2 ms | 2.0 |
+| Cache on | 14,661 | 2.1 ms | 3.6 ms | 1.0 |
+
+The remaining database transaction is SDK key authentication. These numbers come from one laptop running everything, so treat them as a comparison, not a capacity estimate.
 
 ---
 
@@ -285,7 +311,7 @@ CI runs `go vet`, unit and integration tests, `govulncheck` and `npm audit`, a s
 3. ✅ Stewards + `stew` CLI
 4. ✅ Dashboard
 5. ✅ Approvals for production
-6. Redis cache + rate limiting
+6. ✅ Redis cache + rate limiting
 7. Stale-flag detection
 8. VS Code extension
 9. Stretch: OpenFeature-compatible provider
