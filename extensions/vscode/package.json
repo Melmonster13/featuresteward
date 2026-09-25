@@ -36,6 +36,11 @@
           "default": "",
           "scope": "machine",
           "markdownDescription": "The FeatureSteward server, such as `https://flags.example.com`. Only your user settings can set this, so a workspace can't send your token elsewhere."
+        },
+        "featuresteward.completion": {
+          "type": "boolean",
+          "default": true,
+          "description": "Suggest flag keys while typing inside quotes."
         }
       }
     }

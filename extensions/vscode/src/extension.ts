@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { APIError, checkToken, checkURL, Client, type Environment, type Flag } from "./api";
-import { hoverMarkdown, keyAt } from "./hover";
+import { openStringAt } from "./complete";
+import { hoverMarkdown, keyAt, staleLabel } from "./hover";
 
 // The token is kept in VS Code's secret storage together with the URL it
 // was issued for, so changing the URL setting never sends it elsewhere.
@@ -22,6 +23,7 @@ let flags = new Map<string, Flag>();
 let environments: Environment[] = [];
 
 const refreshEvery = 60_000;
+const documents: vscode.DocumentSelector = [{ scheme: "file" }, { scheme: "untitled" }];
 
 export function activate(context: vscode.ExtensionContext): void {
   secrets = context.secrets;
@@ -35,7 +37,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("featuresteward.signIn", signIn),
     vscode.commands.registerCommand("featuresteward.signOut", signOut),
     vscode.commands.registerCommand("featuresteward.refresh", refresh),
-    vscode.languages.registerHoverProvider([{ scheme: "file" }, { scheme: "untitled" }], { provideHover }),
+    vscode.languages.registerHoverProvider(documents, { provideHover }),
+    vscode.languages.registerCompletionItemProvider(documents, { provideCompletionItems }, '"', "'", "`"),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("featuresteward.url")) void refresh();
     }),
@@ -106,11 +109,36 @@ function provideHover(doc: vscode.TextDocument, pos: vscode.Position): vscode.Ho
   const m = keyAt(doc.lineAt(pos.line).text, pos.character);
   const flag = m && flags.get(m.key);
   if (!m || !flag) return undefined;
-  // Not trusted: links can't run commands, and HTML isn't rendered.
+  return new vscode.Hover(describe(flag), new vscode.Range(pos.line, m.start, pos.line, m.end));
+}
+
+function provideCompletionItems(doc: vscode.TextDocument, pos: vscode.Position): vscode.CompletionItem[] | undefined {
+  if (!vscode.workspace.getConfiguration("featuresteward", doc).get<boolean>("completion", true)) return undefined;
+  const open = openStringAt(doc.lineAt(pos.line).text, pos.character);
+  if (!open || flags.size === 0) return undefined;
+  const range = new vscode.Range(pos.line, open.start, pos.line, open.end);
+  return [...flags.values()].map((f) => {
+    const item = new vscode.CompletionItem({ label: f.key, description: f.name }, vscode.CompletionItemKind.Constant);
+    item.range = range;
+    item.detail = f.steward ? `Steward: @${f.steward}` : "No steward";
+    item.documentation = describe(f);
+    if (f.stale) {
+      item.tags = [vscode.CompletionItemTag.Deprecated];
+      item.detail += ` · Stale: ${staleLabel(f.stale.reason)}`;
+    }
+    // Stale flags sort last.
+    item.sortText = `${f.stale ? 1 : 0}${f.key}`;
+    return item;
+  });
+}
+
+// describe renders a flag's details. Not trusted: links can't run
+// commands, and HTML isn't rendered.
+function describe(flag: Flag): vscode.MarkdownString {
   const md = new vscode.MarkdownString(hoverMarkdown(flag, environments, configuredURL()), true);
   md.isTrusted = false;
   md.supportHtml = false;
-  return new vscode.Hover(md, new vscode.Range(pos.line, m.start, pos.line, m.end));
+  return md;
 }
 
 function show(text: string, tooltip: string, command?: string): void {
