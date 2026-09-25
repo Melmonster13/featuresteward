@@ -29,7 +29,7 @@ Most teams either pay for a hosted service or hack flags into config files with 
 - [x] A steward (owner) on every flag
 - [x] Role-based access control (viewer / editor / approver / admin)
 - [x] Approval workflow for production changes, routed to the flag's steward
-- [ ] Stale-flag detection with steward notifications
+- [x] Stale-flag detection with steward notifications
 - [x] Append-only audit log (tamper-evident hash chain as a stretch goal)
 - [x] Redis-backed evaluation cache
 - [x] Rate-limited evaluation endpoint
@@ -89,8 +89,8 @@ To work on the dashboard with live reload, run `make web-dev` (needs Node.js 24)
 
 Sign in with an API token; the dashboard swaps it for a 12-hour session.
 
-- **Flags:** every flag's state per environment and its steward, with search and filters for environment and steward (yours, or none).
-- **Flag page:** turn a flag on or off, set its rollout and targeting rules per environment, reassign the steward, archive it, and read its history. In `prod`, saving becomes **Request change**, except turning the flag off.
+- **Flags:** every flag's state per environment and its steward, with search and filters for environment, steward (yours, or none), and stale flags. Stale flags are tagged, and stewards see how many of theirs are stale.
+- **Flag page:** turn a flag on or off, set its rollout and targeting rules per environment, reassign the steward, mark it permanent, archive it, and read its history. A stale flag shows why and what to do about it. In `prod`, saving becomes **Request change**, except turning the flag off.
 - **Reviews:** change requests waiting for you, your own, and recently closed ones, with the current and requested settings side by side.
 - **Your tokens:** create tokens for the CLI and scripts, and revoke them.
 - **Admin pages:** add users (with a first sign-in token to send them), change roles, disable users, manage SDK keys and environments.
@@ -132,6 +132,9 @@ stew rollout new-checkout prod 25 --reason "launch to a quarter"   # files a cha
 stew requests                              # pending requests, and whether you can review them
 stew approve 12 --comment "ship it"        # or: stew reject 12, stew cancel 12
 stew toggle new-checkout prod off          # the kill switch applies immediately
+
+stew stale --steward me                    # your flags that look safe to remove
+stew permanent ops-maintenance "ops kill switch"   # never report it stale (or: --clear)
 ```
 
 `toggle` and `rollout` change one setting and keep the rest, including targeting rules. Every change carries an `Idempotency-Key`, so `stew` retries network errors and 502/503/504 responses without applying a change twice. See [Production approvals](#production-approvals) for how `prod` changes work.
@@ -145,8 +148,6 @@ For scripts, most commands take `--json`, and exit codes tell failures apart:
 | 2 | Bad usage |
 | 3 | Not logged in, or not allowed |
 | 4 | Flag or environment not found |
-
-`stew stale` arrives with stale-flag detection (Milestone 7).
 
 ---
 
@@ -221,6 +222,29 @@ Two changes skip approval:
 - **Emergency changes:** an admin can apply any change directly by giving a reason (`"reason"` in the API, `--emergency` in `stew`). The reason is kept in the audit log.
 
 Every request, review, and change is recorded in the flag's history.
+
+---
+
+## Stale flags
+
+A flag that has done its job becomes dead code. FeatureSteward reports a flag as **stale**, with a suggestion, when it has been one of these for `STALE_AFTER_DAYS` (30 by default):
+
+| Stale as | Meaning | Suggestion |
+|---|---|---|
+| Unused | Nothing has evaluated it in any environment | Check the code no longer uses it, then archive it |
+| Always on | Every environment serves on to everyone, unchanged | Remove the flag and keep the new code |
+| Always off | Every environment serves off to everyone, unchanged | Remove the flag and the code behind it |
+| Settled | Unchanged, serving one value to everyone in each environment, but on in some and off in others | Decide on one, then remove the flag |
+
+"Everyone" means the flag is off, or on at 0% or 100% with no rules that serve the other value. Protected environments decide between always on and always off when they agree. Flags with a pending change request, archived flags, and permanent flags are never stale.
+
+**Where it shows up:** the dashboard's flag list (tag and filter) and flag page, `stew stale`, `stew status`, and `GET /api/v1/flags?stale=true`. Every flag in the API has a `stale` field (`null` when it isn't) and its last change and evaluation per environment.
+
+**Permanent flags:** some flags are meant to last, like an operations kill switch. The steward or an admin can mark one permanent with a reason (the flag page, `stew permanent`, or `PUT /api/v1/flags/{key}/permanent`), and it's never reported stale. The mark and its removal are in the flag's history.
+
+**Daily digest:** with `STALE_WEBHOOK_URL` set, the server posts stale flags once a day, grouped by steward, with links to the dashboard when `PUBLIC_URL` is set. It lists flag keys and steward handles only, and repeats a flag at most once a week. With several servers, one sends it.
+
+Evaluations are counted in memory and saved to Postgres every minute, so recording them doesn't slow down `/evaluate`. A server that stops abruptly can lose up to a minute of this, which can only make a flag look stale a minute early.
 
 ---
 
@@ -315,7 +339,7 @@ With the cache on, an evaluation reads neither the flag nor the SDK key from Pos
 4. ✅ Dashboard
 5. ✅ Approvals for production
 6. ✅ Redis cache + rate limiting
-7. Stale-flag detection
+7. ✅ Stale-flag detection
 8. VS Code extension
 9. Stretch: OpenFeature-compatible provider
 
