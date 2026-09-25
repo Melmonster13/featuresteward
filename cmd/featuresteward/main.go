@@ -61,8 +61,18 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	rdb, err := connectRedis(ctx, os.Getenv("REDIS_URL"), log)
+	if err != nil {
+		return err
+	}
+	var redisCheck func(context.Context) error
+	if rdb != nil {
+		defer rdb.Close()
+		redisCheck = func(ctx context.Context) error { return rdb.Ping(ctx).Err() }
+	}
+
 	db := store.NewPostgres(pool)
-	api := httpapi.NewRouter(db, db, db, log)
+	api := httpapi.NewRouter(db, db, db, log, httpapi.WithHealthCheck("redis", redisCheck))
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api)
 	mux.Handle("/healthz", api)

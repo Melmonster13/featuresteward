@@ -102,8 +102,32 @@ func (c *client) mustDo(method, path, body string, want int) map[string]any {
 func TestHealthzNeedsNoAuth(t *testing.T) {
 	rec := httptest.NewRecorder()
 	newClient(t, flagtest.NewMemory()).h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if rec.Code != http.StatusOK || rec.Body.String() != `{"status":"ok"}` {
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"ok"}` {
 		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHealthzReportsOptionalDependencies(t *testing.T) {
+	h := NewRouter(flagtest.NewMemory(), authtest.NewMemory(), idemtest.NewMemory(), slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithHealthCheck("redis", func(context.Context) error { return errors.New("connection refused") }),
+		WithHealthCheck("cache", func(context.Context) error { return nil }),
+		WithHealthCheck("extra", nil))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	var got map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	want := map[string]string{"status": "ok", "redis": "unavailable", "cache": "ok", "extra": "disabled"}
+	if rec.Code != http.StatusOK || len(got) != len(want) {
+		t.Fatalf("got %d %v", rec.Code, got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+	// The error's text isn't exposed to unauthenticated callers.
+	if strings.Contains(rec.Body.String(), "refused") {
+		t.Error("healthz leaked an error message")
 	}
 }
 

@@ -229,7 +229,7 @@ Every request, review, and change is recorded in the flag's history.
 | Variable | Description | Default |
 |---|---|---|
 | `DATABASE_URL` | PostgreSQL connection string | — |
-| `REDIS_URL` | Redis connection string | — |
+| `REDIS_URL` | Redis connection string. Optional: without it, or while Redis is down, evaluations aren't cached or rate limited. `/healthz` reports its status. | — |
 | `PORT` | API port | `8080` |
 | `CACHE_TTL_SECONDS` | Evaluation cache lifetime | `30` |
 | `RATE_LIMIT_PER_MIN` | Evaluation requests per client per minute | `600` |

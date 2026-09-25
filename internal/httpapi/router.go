@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Melmonster13/featuresteward/internal/auth"
 	"github.com/Melmonster13/featuresteward/internal/errs"
@@ -19,10 +20,26 @@ import (
 const maxBodyBytes = 1 << 20
 
 type server struct {
-	flags flag.Store
-	users auth.Store
-	idem  idempotency.Store
-	log   *slog.Logger
+	flags  flag.Store
+	users  auth.Store
+	idem   idempotency.Store
+	log    *slog.Logger
+	checks []healthCheck
+}
+
+// Option configures NewRouter.
+type Option func(*server)
+
+type healthCheck struct {
+	name  string
+	check func(context.Context) error
+}
+
+// WithHealthCheck adds an optional dependency to GET /healthz, reported
+// as "ok", "unavailable", or "disabled" (a nil check). It never fails the
+// health check, since the API works without optional dependencies.
+func WithHealthCheck(name string, check func(context.Context) error) Option {
+	return func(s *server) { s.checks = append(s.checks, healthCheck{name, check}) }
 }
 
 // NewRouter returns the API handler. Every /api/v1 route needs
@@ -33,8 +50,11 @@ type server struct {
 // Each route names the minimum role it needs. Roles are cumulative, and
 // every user is at least a viewer. State-changing routes accept an
 // Idempotency-Key header.
-func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *slog.Logger) http.Handler {
+func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *slog.Logger, opts ...Option) http.Handler {
 	s := &server{flags: flags, users: users, idem: idem, log: log}
+	for _, opt := range opts {
+		opt(s)
+	}
 
 	api := http.NewServeMux()
 	register := func(pattern string, min auth.Role, redact bool, h http.HandlerFunc) {
@@ -95,16 +115,27 @@ func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *
 	route("PUT /api/v1/environments/{key}", auth.RoleAdmin, s.updateEnvironmentSettings)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz)
+	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /api/v1/session", s.createSession)
 	mux.HandleFunc("DELETE /api/v1/session", s.deleteSession)
 	mux.Handle("/api/", s.authenticate(api))
 	return securityHeaders(mux)
 }
 
-func handleHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok"}`))
+func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
+	out := map[string]string{"status": "ok"}
+	for _, c := range s.checks {
+		out[c.name] = "disabled"
+		if c.check != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+			out[c.name] = "ok"
+			if err := c.check(ctx); err != nil {
+				out[c.name] = "unavailable"
+			}
+			cancel()
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // principal is who is calling: a user, or an app holding an SDK key.
