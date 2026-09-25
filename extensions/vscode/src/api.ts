@@ -21,6 +21,12 @@ export interface EnvConfig {
   rules: Rule[];
 }
 
+export interface Environment {
+  key: string;
+  name: string;
+  protected: boolean;
+}
+
 export type StaleReason = "unused" | "always_on" | "always_off" | "settled_mixed";
 
 export interface Flag {
@@ -86,6 +92,11 @@ export class Client {
   async flags(): Promise<Flag[]> {
     const body = await this.get<{ flags: Flag[] | null }>("/api/v1/flags");
     return body.flags ?? [];
+  }
+
+  async environments(): Promise<Environment[]> {
+    const body = await this.get<{ environments: Environment[] | null }>("/api/v1/environments");
+    return body.environments ?? [];
   }
 
   private async get<T>(path: string): Promise<T> {

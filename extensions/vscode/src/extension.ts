@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { APIError, checkToken, checkURL, Client } from "./api";
+import { APIError, checkToken, checkURL, Client, type Environment, type Flag } from "./api";
+import { hoverMarkdown, keyAt } from "./hover";
 
 // The token is kept in VS Code's secret storage together with the URL it
 // was issued for, so changing the URL setting never sends it elsewhere.
@@ -15,6 +16,12 @@ let secrets: vscode.SecretStorage;
 let log: vscode.LogOutputChannel;
 // refreshes counts refresh calls, so only the latest one updates the status.
 let refreshes = 0;
+// The flags and environments from the last successful refresh. They're
+// kept through network errors, and cleared on signing out.
+let flags = new Map<string, Flag>();
+let environments: Environment[] = [];
+
+const refreshEvery = 60_000;
 
 export function activate(context: vscode.ExtensionContext): void {
   secrets = context.secrets;
@@ -27,6 +34,8 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
     vscode.commands.registerCommand("featuresteward.signIn", signIn),
     vscode.commands.registerCommand("featuresteward.signOut", signOut),
+    vscode.commands.registerCommand("featuresteward.refresh", refresh),
+    vscode.languages.registerHoverProvider([{ scheme: "file" }, { scheme: "untitled" }], { provideHover }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("featuresteward.url")) void refresh();
     }),
@@ -34,6 +43,8 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.key === secretKey) void refresh();
     }),
   );
+  const timer = setInterval(() => void refresh(), refreshEvery);
+  context.subscriptions.push({ dispose: () => clearInterval(timer) });
   void refresh();
 }
 
@@ -71,20 +82,35 @@ async function refresh(): Promise<void> {
   const c = await client();
   if (id !== refreshes) return;
   if (!c) {
+    flags = new Map();
+    environments = [];
     show("$(flag) FeatureSteward: signed out", "Sign in to see your flags", "featuresteward.signIn");
     return;
   }
   try {
-    const flags = await c.flags();
+    const [list, envs] = await Promise.all([c.flags(), c.environments()]);
     if (id !== refreshes) return;
-    log.info(`Loaded ${flags.length} flags from ${configuredURL()}.`);
-    show(`$(flag) ${flags.length} flag${flags.length === 1 ? "" : "s"}`, `FeatureSteward at ${configuredURL()}`);
+    if (list.length !== flags.size) log.info(`Loaded ${list.length} flags from ${configuredURL()}.`);
+    flags = new Map(list.map((f) => [f.key, f]));
+    environments = envs;
+    show(`$(flag) ${list.length} flag${list.length === 1 ? "" : "s"}`, `FeatureSteward at ${configuredURL()}. Click to refresh.`, "featuresteward.refresh");
   } catch (err) {
     if (id !== refreshes) return;
     log.error(`Loading flags failed: ${message(err)}`);
     const signIn = err instanceof APIError && err.status === 401;
     show("$(warning) FeatureSteward", message(err), signIn ? "featuresteward.signIn" : undefined);
   }
+}
+
+function provideHover(doc: vscode.TextDocument, pos: vscode.Position): vscode.Hover | undefined {
+  const m = keyAt(doc.lineAt(pos.line).text, pos.character);
+  const flag = m && flags.get(m.key);
+  if (!m || !flag) return undefined;
+  // Not trusted: links can't run commands, and HTML isn't rendered.
+  const md = new vscode.MarkdownString(hoverMarkdown(flag, environments, configuredURL()), true);
+  md.isTrusted = false;
+  md.supportHtml = false;
+  return new vscode.Hover(md, new vscode.Range(pos.line, m.start, pos.line, m.end));
 }
 
 function show(text: string, tooltip: string, command?: string): void {

@@ -25,7 +25,8 @@
   "contributes": {
     "commands": [
       { "command": "featuresteward.signIn", "title": "Sign In", "category": "FeatureSteward" },
-      { "command": "featuresteward.signOut", "title": "Sign Out", "category": "FeatureSteward" }
+      { "command": "featuresteward.signOut", "title": "Sign Out", "category": "FeatureSteward" },
+      { "command": "featuresteward.refresh", "title": "Refresh Flags", "category": "FeatureSteward" }
     ],
     "configuration": {
       "title": "FeatureSteward",
