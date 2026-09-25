@@ -1,6 +1,7 @@
 // Finding flag keys in code and describing flags. No VS Code
 // dependencies, so it's tested on its own.
 import type { EnvConfig, Environment, Flag, StaleReason } from "./api";
+import { quoted } from "./scan";
 
 export interface KeyMatch {
   key: string;
@@ -9,7 +10,6 @@ export interface KeyMatch {
   end: number;
 }
 
-const quoted = /(["'`])([a-z0-9][a-z0-9-]{0,99})\1/g;
 
 // keyAt returns the quoted flag-key-shaped string at column ch of line,
 // if any. The caller checks that it's a known key.

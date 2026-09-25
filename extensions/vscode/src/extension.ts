@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { APIError, checkToken, checkURL, Client, type Environment, type Flag } from "./api";
 import { openStringAt } from "./complete";
 import { hoverMarkdown, keyAt, staleLabel } from "./hover";
+import { StaleFlags } from "./stale";
 
 // The token is kept in VS Code's secret storage together with the URL it
 // was issued for, so changing the URL setting never sends it elsewhere.
@@ -21,6 +22,7 @@ let refreshes = 0;
 // kept through network errors, and cleared on signing out.
 let flags = new Map<string, Flag>();
 let environments: Environment[] = [];
+let staleFlags: StaleFlags;
 
 const refreshEvery = 60_000;
 const documents: vscode.DocumentSelector = [{ scheme: "file" }, { scheme: "untitled" }];
@@ -31,9 +33,13 @@ export function activate(context: vscode.ExtensionContext): void {
   status.name = "FeatureSteward";
   status.show();
   log = vscode.window.createOutputChannel("FeatureSteward", { log: true });
+  staleFlags = new StaleFlags(log);
   context.subscriptions.push(
     status,
     log,
+    staleFlags,
+    vscode.window.registerTreeDataProvider("featuresteward.stale", staleFlags),
+    vscode.commands.registerCommand("featuresteward.findStale", () => staleFlags.scan()),
     vscode.commands.registerCommand("featuresteward.signIn", signIn),
     vscode.commands.registerCommand("featuresteward.signOut", signOut),
     vscode.commands.registerCommand("featuresteward.refresh", refresh),
@@ -87,6 +93,8 @@ async function refresh(): Promise<void> {
   if (!c) {
     flags = new Map();
     environments = [];
+    staleFlags.update([]);
+    void vscode.commands.executeCommand("setContext", "featuresteward.signedIn", false);
     show("$(flag) FeatureSteward: signed out", "Sign in to see your flags", "featuresteward.signIn");
     return;
   }
@@ -96,6 +104,8 @@ async function refresh(): Promise<void> {
     if (list.length !== flags.size) log.info(`Loaded ${list.length} flags from ${configuredURL()}.`);
     flags = new Map(list.map((f) => [f.key, f]));
     environments = envs;
+    staleFlags.update(list);
+    void vscode.commands.executeCommand("setContext", "featuresteward.signedIn", true);
     show(`$(flag) ${list.length} flag${list.length === 1 ? "" : "s"}`, `FeatureSteward at ${configuredURL()}. Click to refresh.`, "featuresteward.refresh");
   } catch (err) {
     if (id !== refreshes) return;

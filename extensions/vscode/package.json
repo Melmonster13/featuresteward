@@ -14,9 +14,13 @@
   "engines": {
     "vscode": "^1.125.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "main": "./out/extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true
@@ -24,9 +28,27 @@
   },
   "contributes": {
     "commands": [
-      { "command": "featuresteward.signIn", "title": "Sign In", "category": "FeatureSteward" },
-      { "command": "featuresteward.signOut", "title": "Sign Out", "category": "FeatureSteward" },
-      { "command": "featuresteward.refresh", "title": "Refresh Flags", "category": "FeatureSteward" }
+      {
+        "command": "featuresteward.signIn",
+        "title": "Sign In",
+        "category": "FeatureSteward"
+      },
+      {
+        "command": "featuresteward.signOut",
+        "title": "Sign Out",
+        "category": "FeatureSteward"
+      },
+      {
+        "command": "featuresteward.refresh",
+        "title": "Refresh Flags",
+        "category": "FeatureSteward"
+      },
+      {
+        "command": "featuresteward.findStale",
+        "title": "Find Stale Flags",
+        "category": "FeatureSteward",
+        "icon": "$(refresh)"
+      }
     ],
     "configuration": {
       "title": "FeatureSteward",
@@ -43,6 +65,35 @@
           "description": "Suggest flag keys while typing inside quotes."
         }
       }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "featuresteward.stale",
+          "name": "Stale Flags"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "featuresteward.stale",
+        "contents": "Sign in to FeatureSteward to see stale flags.\n[Sign In](command:featuresteward.signIn)",
+        "when": "!featuresteward.signedIn"
+      },
+      {
+        "view": "featuresteward.stale",
+        "contents": "No stale flags. Flags that look safe to remove show up here, with the places your code uses them.",
+        "when": "featuresteward.signedIn"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "featuresteward.findStale",
+          "when": "view == featuresteward.stale",
+          "group": "navigation"
+        }
+      ]
     }
   },
   "scripts": {
