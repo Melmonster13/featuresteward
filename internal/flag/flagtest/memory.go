@@ -286,6 +286,10 @@ func clone(f *flag.Flag) flag.Flag {
 		c.Environments[k] = v
 	}
 	c.Activity = maps.Clone(f.Activity)
+	if f.StaleNotifiedAt != nil {
+		t := *f.StaleNotifiedAt
+		c.StaleNotifiedAt = &t
+	}
 	return c
 }
 
@@ -304,6 +308,17 @@ func (m *Memory) SetPermanent(_ context.Context, actor, key, reason string) (fla
 	f.PermanentReason, f.UpdatedAt = reason, time.Now()
 	m.audit(actor, flag.ActionPermanent, key, "", flag.NewPermanentSnapshot(before), flag.NewPermanentSnapshot(reason))
 	return clone(f), nil
+}
+
+func (m *Memory) MarkStaleNotified(_ context.Context, keys []string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range keys {
+		if f, ok := m.flags[k]; ok {
+			f.StaleNotifiedAt = &at
+		}
+	}
+	return nil
 }
 
 func (m *Memory) RecordEvaluations(_ context.Context, seen []flag.Evaluation) error {

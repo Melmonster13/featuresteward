@@ -109,6 +109,10 @@ func run(log *slog.Logger) error {
 		return errors.New("STALE_AFTER_DAYS must be at least 1")
 	}
 	opts = append(opts, httpapi.WithStaleAfter(time.Duration(staleDays)*24*time.Hour))
+	staleDigest, err := newDigest(db, time.Duration(staleDays)*24*time.Hour, log)
+	if err != nil {
+		return err
+	}
 	recorder := usage.New(db, log)
 	opts = append(opts, httpapi.WithUsage(recorder.Seen))
 	api := httpapi.NewRouter(flags, users, db, log, opts...)
@@ -125,7 +129,16 @@ func run(log *slog.Logger) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	runDigest := func() {
+		if staleDigest == nil {
+			return
+		}
+		if err := staleDigest.Run(ctx); err != nil {
+			log.Error("send the stale flag digest", "err", err)
+		}
+	}
 	go func() {
+		runDigest()
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
 		for {
@@ -144,6 +157,7 @@ func run(log *slog.Logger) error {
 				} else if n > 0 {
 					log.Info("expired change requests", "count", n)
 				}
+				runDigest()
 			}
 		}
 	}()

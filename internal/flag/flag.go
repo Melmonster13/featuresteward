@@ -38,6 +38,8 @@ type Flag struct {
 	// PermanentReason marks a flag meant to last, such as an operations
 	// kill switch; it's never reported stale. "" means not permanent.
 	PermanentReason string
+	// StaleNotifiedAt is when the steward was last told it's stale.
+	StaleNotifiedAt *time.Time
 }
 
 // Activity is a flag's recent history in one environment.
@@ -162,6 +164,9 @@ type Store interface {
 	// RecordEvaluations notes when flags were evaluated. A time earlier
 	// than the stored one, or an unknown flag or environment, is ignored.
 	RecordEvaluations(ctx context.Context, seen []Evaluation) error
+	// MarkStaleNotified records that the flags' stewards were told they're
+	// stale. Unknown keys are ignored.
+	MarkStaleNotified(ctx context.Context, keys []string, at time.Time) error
 	ArchiveFlag(ctx context.Context, actor, key string) error
 
 	// EvalConfig returns what eval.Evaluate needs for one flag in one environment.

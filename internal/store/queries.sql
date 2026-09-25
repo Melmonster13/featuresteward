@@ -96,3 +96,21 @@ FROM (SELECT unnest(sqlc.arg(keys)::text[]) AS key,
              unnest(sqlc.arg(ats)::timestamptz[]) AS at) u,
      flags f
 WHERE f.id = fe.flag_id AND f.key = u.key AND fe.environment = u.env;
+
+-- name: MarkStaleNotified :exec
+UPDATE flags SET stale_notified_at = sqlc.arg(at)
+WHERE key = ANY(sqlc.arg(keys)::text[]);
+
+-- name: CreateJob :exec
+INSERT INTO jobs (name, last_run_at) VALUES ($1, '-infinity')
+ON CONFLICT (name) DO NOTHING;
+
+-- Claims a job's run if its last one was at least every ago. Only one
+-- caller per period gets a row back.
+-- name: ReleaseJob :exec
+UPDATE jobs SET last_run_at = '-infinity' WHERE name = $1;
+
+-- name: ClaimJob :one
+UPDATE jobs SET last_run_at = now()
+WHERE name = sqlc.arg(name) AND last_run_at <= now() - sqlc.arg(every)::interval
+RETURNING name;

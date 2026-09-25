@@ -97,6 +97,28 @@ func runActivityContract(t *testing.T, newStore func(t *testing.T) flag.Store) {
 		}
 	})
 
+	t.Run("mark stale notified", func(t *testing.T) {
+		s := newStore(t)
+		mustCreate(t, s, "old-banner")
+		mustCreate(t, s, "other")
+		if f, _ := s.GetFlag(ctx, "old-banner"); f.StaleNotifiedAt != nil {
+			t.Fatalf("new flag notified at %v", f.StaleNotifiedAt)
+		}
+		at := time.Now().Truncate(time.Microsecond)
+		if err := s.MarkStaleNotified(ctx, []string{"old-banner", "nope"}, at); err != nil {
+			t.Fatal(err)
+		}
+		if f, _ := s.GetFlag(ctx, "old-banner"); f.StaleNotifiedAt == nil || !f.StaleNotifiedAt.Equal(at) {
+			t.Errorf("notified at = %v, want %v", f.StaleNotifiedAt, at)
+		}
+		if f, _ := s.GetFlag(ctx, "other"); f.StaleNotifiedAt != nil {
+			t.Errorf("other flag marked: %v", f.StaleNotifiedAt)
+		}
+		if err := s.MarkStaleNotified(ctx, nil, at); err != nil {
+			t.Errorf("empty: %v", err)
+		}
+	})
+
 	t.Run("permanent flags", func(t *testing.T) {
 		s := newStore(t)
 		mustCreate(t, s, "kill-switch")

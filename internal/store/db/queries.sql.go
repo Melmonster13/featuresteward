@@ -31,6 +31,24 @@ func (q *Queries) BackfillFlagEnvironments(ctx context.Context, environment stri
 	return err
 }
 
+const claimJob = `-- name: ClaimJob :one
+UPDATE jobs SET last_run_at = now()
+WHERE name = $1 AND last_run_at <= now() - $2::interval
+RETURNING name
+`
+
+type ClaimJobParams struct {
+	Name  string
+	Every pgtype.Interval
+}
+
+func (q *Queries) ClaimJob(ctx context.Context, arg ClaimJobParams) (string, error) {
+	row := q.db.QueryRow(ctx, claimJob, arg.Name, arg.Every)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
 const createEnvironment = `-- name: CreateEnvironment :one
 INSERT INTO environments (key, name, protected)
 VALUES ($1, $2, $3)
@@ -58,7 +76,7 @@ func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentPa
 const createFlag = `-- name: CreateFlag :one
 INSERT INTO flags (key, name, description, steward)
 VALUES ($1, $2, $3, $4)
-RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason
+RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason, stale_notified_at
 `
 
 type CreateFlagParams struct {
@@ -86,6 +104,7 @@ func (q *Queries) CreateFlag(ctx context.Context, arg CreateFlagParams) (Flag, e
 		&i.ArchivedAt,
 		&i.Steward,
 		&i.PermanentReason,
+		&i.StaleNotifiedAt,
 	)
 	return i, err
 }
@@ -97,6 +116,16 @@ SELECT $1, key FROM environments
 
 func (q *Queries) CreateFlagEnvironments(ctx context.Context, flagID int64) error {
 	_, err := q.db.Exec(ctx, createFlagEnvironments, flagID)
+	return err
+}
+
+const createJob = `-- name: CreateJob :exec
+INSERT INTO jobs (name, last_run_at) VALUES ($1, '-infinity')
+ON CONFLICT (name) DO NOTHING
+`
+
+func (q *Queries) CreateJob(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, createJob, name)
 	return err
 }
 
@@ -158,7 +187,7 @@ func (q *Queries) GetEvalConfig(ctx context.Context, arg GetEvalConfigParams) (G
 }
 
 const getFlag = `-- name: GetFlag :one
-SELECT id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason FROM flags WHERE key = $1
+SELECT id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason, stale_notified_at FROM flags WHERE key = $1
 `
 
 func (q *Queries) GetFlag(ctx context.Context, key string) (Flag, error) {
@@ -174,6 +203,7 @@ func (q *Queries) GetFlag(ctx context.Context, key string) (Flag, error) {
 		&i.ArchivedAt,
 		&i.Steward,
 		&i.PermanentReason,
+		&i.StaleNotifiedAt,
 	)
 	return i, err
 }
@@ -205,7 +235,7 @@ func (q *Queries) GetFlagEnvironmentForUpdate(ctx context.Context, arg GetFlagEn
 }
 
 const getFlagForUpdate = `-- name: GetFlagForUpdate :one
-SELECT id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason FROM flags WHERE key = $1 FOR UPDATE
+SELECT id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason, stale_notified_at FROM flags WHERE key = $1 FOR UPDATE
 `
 
 func (q *Queries) GetFlagForUpdate(ctx context.Context, key string) (Flag, error) {
@@ -221,6 +251,7 @@ func (q *Queries) GetFlagForUpdate(ctx context.Context, key string) (Flag, error
 		&i.ArchivedAt,
 		&i.Steward,
 		&i.PermanentReason,
+		&i.StaleNotifiedAt,
 	)
 	return i, err
 }
@@ -347,7 +378,7 @@ func (q *Queries) ListFlagEnvironments(ctx context.Context, flagIds []int64) ([]
 }
 
 const listFlags = `-- name: ListFlags :many
-SELECT id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason FROM flags WHERE archived_at IS NULL ORDER BY key
+SELECT id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason, stale_notified_at FROM flags WHERE archived_at IS NULL ORDER BY key
 `
 
 func (q *Queries) ListFlags(ctx context.Context) ([]Flag, error) {
@@ -369,6 +400,7 @@ func (q *Queries) ListFlags(ctx context.Context) ([]Flag, error) {
 			&i.ArchivedAt,
 			&i.Steward,
 			&i.PermanentReason,
+			&i.StaleNotifiedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -378,6 +410,21 @@ func (q *Queries) ListFlags(ctx context.Context) ([]Flag, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const markStaleNotified = `-- name: MarkStaleNotified :exec
+UPDATE flags SET stale_notified_at = $1
+WHERE key = ANY($2::text[])
+`
+
+type MarkStaleNotifiedParams struct {
+	At   pgtype.Timestamptz
+	Keys []string
+}
+
+func (q *Queries) MarkStaleNotified(ctx context.Context, arg MarkStaleNotifiedParams) error {
+	_, err := q.db.Exec(ctx, markStaleNotified, arg.At, arg.Keys)
+	return err
 }
 
 const recordEvaluations = `-- name: RecordEvaluations :exec
@@ -402,10 +449,21 @@ func (q *Queries) RecordEvaluations(ctx context.Context, arg RecordEvaluationsPa
 	return err
 }
 
+const releaseJob = `-- name: ReleaseJob :exec
+UPDATE jobs SET last_run_at = '-infinity' WHERE name = $1
+`
+
+// Claims a job's run if its last one was at least every ago. Only one
+// caller per period gets a row back.
+func (q *Queries) ReleaseJob(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, releaseJob, name)
+	return err
+}
+
 const setPermanent = `-- name: SetPermanent :one
 UPDATE flags SET permanent_reason = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason
+RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason, stale_notified_at
 `
 
 type SetPermanentParams struct {
@@ -426,6 +484,7 @@ func (q *Queries) SetPermanent(ctx context.Context, arg SetPermanentParams) (Fla
 		&i.ArchivedAt,
 		&i.Steward,
 		&i.PermanentReason,
+		&i.StaleNotifiedAt,
 	)
 	return i, err
 }
@@ -433,7 +492,7 @@ func (q *Queries) SetPermanent(ctx context.Context, arg SetPermanentParams) (Fla
 const setSteward = `-- name: SetSteward :one
 UPDATE flags SET steward = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason
+RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason, stale_notified_at
 `
 
 type SetStewardParams struct {
@@ -454,6 +513,7 @@ func (q *Queries) SetSteward(ctx context.Context, arg SetStewardParams) (Flag, e
 		&i.ArchivedAt,
 		&i.Steward,
 		&i.PermanentReason,
+		&i.StaleNotifiedAt,
 	)
 	return i, err
 }
@@ -494,7 +554,7 @@ func (q *Queries) UpdateEnvironmentSettings(ctx context.Context, arg UpdateEnvir
 const updateFlag = `-- name: UpdateFlag :one
 UPDATE flags SET name = $2, description = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason
+RETURNING id, key, name, description, created_at, updated_at, archived_at, steward, permanent_reason, stale_notified_at
 `
 
 type UpdateFlagParams struct {
@@ -516,6 +576,7 @@ func (q *Queries) UpdateFlag(ctx context.Context, arg UpdateFlagParams) (Flag, e
 		&i.ArchivedAt,
 		&i.Steward,
 		&i.PermanentReason,
+		&i.StaleNotifiedAt,
 	)
 	return i, err
 }

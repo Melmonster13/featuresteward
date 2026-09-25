@@ -65,6 +65,7 @@ type Flag struct {
 	ArchivedAt      pgtype.Timestamptz
 	Steward         *string
 	PermanentReason *string
+	StaleNotifiedAt pgtype.Timestamptz
 }
 
 type FlagEnvironment struct {
@@ -85,6 +86,11 @@ type IdempotencyKey struct {
 	Headers     []byte
 	Body        []byte
 	CreatedAt   pgtype.Timestamptz
+}
+
+type Job struct {
+	Name      string
+	LastRunAt pgtype.Timestamptz
 }
 
 type SdkKey struct {

@@ -118,3 +118,48 @@ func withDB(t *testing.T, rawURL, name string) string {
 	u.Path = "/" + name
 	return u.String()
 }
+
+func TestPostgresClaimJob(t *testing.T) {
+	s := dbFactory(t)(t)
+	ctx := context.Background()
+	// Many servers racing for the same run: exactly one wins.
+	wins := make(chan bool, 8)
+	for range 8 {
+		go func() {
+			ok, err := s.ClaimJob(ctx, "test_job", time.Hour)
+			if err != nil {
+				t.Error(err)
+			}
+			wins <- ok
+		}()
+	}
+	n := 0
+	for range 8 {
+		if <-wins {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d claims won, want 1", n)
+	}
+	if ok, _ := s.ClaimJob(ctx, "test_job", time.Hour); ok {
+		t.Error("claimed again within the period")
+	}
+	if ok, _ := s.ClaimJob(ctx, "other_job", time.Hour); !ok {
+		t.Error("jobs aren't independent")
+	}
+	// Once the period has passed, it can be claimed again.
+	if _, err := s.pool.Exec(ctx, "UPDATE jobs SET last_run_at = now() - interval '61 minutes' WHERE name = 'test_job'"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.ClaimJob(ctx, "test_job", time.Hour); !ok {
+		t.Error("couldn't claim after the period")
+	}
+	// Releasing lets it be claimed again right away.
+	if err := s.ReleaseJob(ctx, "test_job"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.ClaimJob(ctx, "test_job", time.Hour); !ok {
+		t.Error("couldn't claim after releasing")
+	}
+}

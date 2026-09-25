@@ -314,6 +314,31 @@ func (s *Postgres) SetPermanent(ctx context.Context, actor, key, reason string) 
 	return out, err
 }
 
+func (s *Postgres) MarkStaleNotified(ctx context.Context, keys []string, at time.Time) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	return s.q.MarkStaleNotified(ctx, db.MarkStaleNotifiedParams{Keys: keys, At: pgtype.Timestamptz{Time: at, Valid: true}})
+}
+
+// ClaimJob returns true to exactly one caller per period of every: the
+// first to run the job since then.
+func (s *Postgres) ClaimJob(ctx context.Context, name string, every time.Duration) (bool, error) {
+	if err := s.q.CreateJob(ctx, name); err != nil {
+		return false, err
+	}
+	_, err := s.q.ClaimJob(ctx, db.ClaimJobParams{Name: name, Every: pgtype.Interval{Microseconds: every.Microseconds(), Valid: true}})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// ReleaseJob gives up a claim, so the job can be claimed again at once.
+func (s *Postgres) ReleaseJob(ctx context.Context, name string) error {
+	return s.q.ReleaseJob(ctx, name)
+}
+
 func (s *Postgres) RecordEvaluations(ctx context.Context, seen []flag.Evaluation) error {
 	if len(seen) == 0 {
 		return nil
@@ -398,6 +423,7 @@ func toFlag(row db.Flag, envs []db.FlagEnvironment) (flag.Flag, error) {
 		Activity:     make(map[string]flag.Activity, len(envs)),
 
 		PermanentReason: deref(row.PermanentReason),
+		StaleNotifiedAt: timePtr(row.StaleNotifiedAt),
 	}
 	for _, e := range envs {
 		cfg, err := toEnvConfig(e.Enabled, e.RolloutPercentage, e.Rules)
