@@ -3,7 +3,7 @@
   "displayName": "FeatureSteward",
   "description": "See your FeatureSteward flags, their stewards, and stale flags without leaving the editor.",
   "version": "0.1.0",
-  "publisher": "melmonster13",
+  "publisher": "melstackbox",
   "private": true,
   "license": "MIT",
   "icon": "icon.png",
