@@ -203,7 +203,7 @@ func TestRedisFailuresFallBackToTheDatabase(t *testing.T) {
 	if !f.eval(t, "new-checkout", "dev").Enabled {
 		t.Error("stale value while Redis is down")
 	}
-	if n := strings.Count(f.logs.String(), "evaluation cache unavailable"); n != 1 {
+	if n := strings.Count(f.logs.String(), "Redis unavailable; evaluations read the database"); n != 1 {
 		t.Errorf("logged %d warnings, want 1 (throttled):\n%s", n, f.logs.String())
 	}
 
@@ -211,7 +211,7 @@ func TestRedisFailuresFallBackToTheDatabase(t *testing.T) {
 	if err := f.redis.StartAddr(addr); err != nil {
 		t.Fatal(err)
 	}
-	f.downUntil.Store(0)
+	f.Guard.Reset()
 	f.inner.reads.Store(0)
 	f.eval(t, "new-checkout", "prod")
 	f.eval(t, "new-checkout", "prod")
@@ -224,7 +224,7 @@ func TestCallerCancellationDoesntTripTheBreaker(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	f.EvalConfig(cancelled, "new-checkout", "prod")
-	if f.downUntil.Load() != 0 {
+	if !f.Guard.Up() {
 		t.Error("a cancelled request turned the cache off")
 	}
 }

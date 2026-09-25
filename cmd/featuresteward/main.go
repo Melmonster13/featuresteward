@@ -15,6 +15,7 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/cache"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/httpapi"
+	"github.com/Melmonster13/featuresteward/internal/ratelimit"
 	"github.com/Melmonster13/featuresteward/internal/store"
 	"github.com/Melmonster13/featuresteward/web"
 )
@@ -85,7 +86,18 @@ func run(log *slog.Logger) error {
 	case rdb != nil:
 		log.Info("CACHE_TTL_SECONDS is 0; evaluations aren't cached")
 	}
-	api := httpapi.NewRouter(flags, db, db, log, httpapi.WithHealthCheck("redis", redisCheck))
+	opts := []httpapi.Option{httpapi.WithHealthCheck("redis", redisCheck)}
+	perMin, err := intEnv("RATE_LIMIT_PER_MIN", 600, "requests")
+	if err != nil {
+		return err
+	}
+	switch {
+	case rdb != nil && perMin > 0:
+		opts = append(opts, httpapi.WithRateLimiter(ratelimit.New(rdb, perMin, log)))
+	case rdb != nil:
+		log.Info("RATE_LIMIT_PER_MIN is 0; evaluations aren't rate limited")
+	}
+	api := httpapi.NewRouter(flags, db, db, log, opts...)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api)
 	mux.Handle("/healthz", api)

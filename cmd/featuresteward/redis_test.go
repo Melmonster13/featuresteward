@@ -56,7 +56,7 @@ func TestSecondsEnv(t *testing.T) {
 	}
 	for _, v := range []string{"-1", "1.5", "30s", "x"} {
 		t.Setenv("TEST_SECONDS", v)
-		if _, err := secondsEnv("TEST_SECONDS", 30); err == nil || !strings.Contains(err.Error(), "TEST_SECONDS") {
+		if _, err := secondsEnv("TEST_SECONDS", 30); err == nil || !strings.Contains(err.Error(), "TEST_SECONDS must be a whole number of seconds") {
 			t.Errorf("%q: err = %v", v, err)
 		}
 	}

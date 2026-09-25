@@ -49,13 +49,19 @@ func (l redisLog) Printf(ctx context.Context, format string, v ...any) {
 
 // secondsEnv reads a whole number of seconds, 0 or more, from name.
 func secondsEnv(name string, fallback int) (time.Duration, error) {
+	n, err := intEnv(name, fallback, "seconds")
+	return time.Duration(n) * time.Second, err
+}
+
+// intEnv reads a whole number, 0 or more, from name.
+func intEnv(name string, fallback int, unit string) (int, error) {
 	v := os.Getenv(name)
 	if v == "" {
-		return time.Duration(fallback) * time.Second, nil
+		return fallback, nil
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
-		return 0, fmt.Errorf("%s must be a whole number of seconds, 0 or more; got %q", name, v)
+		return 0, fmt.Errorf("%s must be a whole number of %s, 0 or more; got %q", name, unit, v)
 	}
-	return time.Duration(n) * time.Second, nil
+	return n, nil
 }

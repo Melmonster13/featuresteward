@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -24,6 +23,7 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/eval"
 	"github.com/Melmonster13/featuresteward/internal/flag"
+	"github.com/Melmonster13/featuresteward/internal/redisguard"
 )
 
 // missing marks a flag and environment that have no evaluation config,
@@ -35,29 +35,26 @@ type Store struct {
 	flag.Store
 	rdb redis.UniversalClient
 	ttl time.Duration
-	log *slog.Logger
 
 	// Prefix namespaces keys; change the version when the format changes.
 	Prefix string
 	// RecheckAfter is when the second clear runs after a change.
 	RecheckAfter time.Duration
-	// Cooldown is how long reads skip Redis after it fails.
-	Cooldown time.Duration
-
-	downUntil atomic.Int64 // unix nanos; reads skip Redis until then
-	lastWarn  atomic.Int64 // unix nanos of the last logged Redis failure
+	// Guard skips Redis for a while after it fails.
+	Guard *redisguard.Guard
 }
 
 var _ flag.Store = (*Store)(nil)
 
 func New(inner flag.Store, rdb redis.UniversalClient, ttl time.Duration, log *slog.Logger) *Store {
-	return &Store{Store: inner, rdb: rdb, ttl: ttl, log: log, Prefix: "fs:eval:v1:", RecheckAfter: time.Second, Cooldown: 5 * time.Second}
+	return &Store{Store: inner, rdb: rdb, ttl: ttl, Prefix: "fs:eval:v1:", RecheckAfter: time.Second,
+		Guard: redisguard.New("evaluations read the database", log)}
 }
 
 func (s *Store) key(flagKey, env string) string { return s.Prefix + env + ":" + flagKey }
 
 func (s *Store) EvalConfig(ctx context.Context, key, env string) (eval.Flag, error) {
-	if time.Now().UnixNano() < s.downUntil.Load() {
+	if !s.Guard.Up() {
 		return s.Store.EvalConfig(ctx, key, env)
 	}
 	k := s.key(key, env)
@@ -72,7 +69,7 @@ func (s *Store) EvalConfig(ctx context.Context, key, env string) (eval.Flag, err
 		}
 		// A corrupt entry is a miss; the set below replaces it.
 	case !errors.Is(err, redis.Nil):
-		s.failed(ctx, "read", err)
+		s.Guard.Failed(ctx, "read", err)
 		return s.Store.EvalConfig(ctx, key, env)
 	}
 
@@ -92,7 +89,7 @@ func (s *Store) EvalConfig(ctx context.Context, key, env string) (eval.Flag, err
 
 func (s *Store) set(ctx context.Context, k, v string) {
 	if err := s.rdb.Set(ctx, k, v, s.ttl).Err(); err != nil {
-		s.failed(ctx, "write", err)
+		s.Guard.Failed(ctx, "write", err)
 	}
 }
 
@@ -103,13 +100,13 @@ func (s *Store) clear(ctx context.Context, keys ...string) {
 		return
 	}
 	if err := s.rdb.Del(ctx, keys...).Err(); err != nil {
-		s.warn(ctx, "clear", err)
+		s.Guard.Warn(ctx, "clear", err)
 	}
 	time.AfterFunc(s.RecheckAfter, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if err := s.rdb.Del(ctx, keys...).Err(); err != nil {
-			s.warn(ctx, "clear", err)
+			s.Guard.Warn(ctx, "clear", err)
 		}
 	})
 }
@@ -118,7 +115,7 @@ func (s *Store) clear(ctx context.Context, keys ...string) {
 func (s *Store) clearFlag(ctx context.Context, key string) {
 	envs, err := s.Store.ListEnvironments(ctx)
 	if err != nil {
-		s.warn(ctx, "list environments to clear", err)
+		s.Guard.Warn(ctx, "list environments to clear", err)
 		return
 	}
 	keys := make([]string, len(envs))
@@ -126,27 +123,6 @@ func (s *Store) clearFlag(ctx context.Context, key string) {
 		keys[i] = s.key(key, e.Key)
 	}
 	s.clear(ctx, keys...)
-}
-
-// failed starts a cooldown, unless the caller gave up (the error is
-// theirs, not Redis's), and logs.
-func (s *Store) failed(ctx context.Context, op string, err error) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.downUntil.Store(time.Now().Add(s.Cooldown).UnixNano())
-	s.warn(ctx, op, err)
-}
-
-// warn logs Redis failures at most once a minute, so an outage under load
-// doesn't flood the log.
-func (s *Store) warn(ctx context.Context, op string, err error) {
-	now := time.Now().UnixNano()
-	last := s.lastWarn.Load()
-	if now-last < int64(time.Minute) || !s.lastWarn.CompareAndSwap(last, now) {
-		return
-	}
-	s.log.WarnContext(ctx, "evaluation cache unavailable; reading from the database", "op", op, "err", err)
 }
 
 // --- Changes that affect evaluation ---
@@ -196,7 +172,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, actor string, env flag.En
 		keys = append(keys, iter.Val())
 	}
 	if err := iter.Err(); err != nil {
-		s.warn(ctx, "scan", err)
+		s.Guard.Warn(ctx, "scan", err)
 	}
 	s.clear(ctx, keys...)
 	return e, nil

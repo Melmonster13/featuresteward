@@ -232,7 +232,7 @@ Every request, review, and change is recorded in the flag's history.
 | `REDIS_URL` | Redis connection string. Optional: without it, or while Redis is down, evaluations aren't cached or rate limited. `/healthz` reports its status. | — |
 | `PORT` | API port | `8080` |
 | `CACHE_TTL_SECONDS` | How long an evaluation stays cached. Changes clear it right away; this only bounds how stale it can get if Redis misses a change. `0` turns the cache off. | `30` |
-| `RATE_LIMIT_PER_MIN` | Evaluation requests per client per minute | `600` |
+| `RATE_LIMIT_PER_MIN` | Evaluations per minute for each SDK key or user. Over it, `/evaluate` returns `429` with `Retry-After`; every response has `RateLimit-*` headers. `0` turns it off. Needs Redis. | `600` |
 | `STALE_AFTER_DAYS` | Days a flag can sit unchanged at 0% or 100% before it's flagged stale | `30` |
 
 ---

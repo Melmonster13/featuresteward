@@ -3,11 +3,15 @@ package httpapi
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +19,7 @@ import (
 	"github.com/Melmonster13/featuresteward/internal/errs"
 	"github.com/Melmonster13/featuresteward/internal/flag"
 	"github.com/Melmonster13/featuresteward/internal/idempotency"
+	"github.com/Melmonster13/featuresteward/internal/ratelimit"
 )
 
 const maxBodyBytes = 1 << 20
@@ -25,6 +30,17 @@ type server struct {
 	idem   idempotency.Store
 	log    *slog.Logger
 	checks []healthCheck
+	limit  RateLimiter
+}
+
+// RateLimiter decides whether a client may make another evaluation.
+type RateLimiter interface {
+	Allow(ctx context.Context, client string) ratelimit.Result
+}
+
+// WithRateLimiter limits POST /api/v1/evaluate per SDK key or user.
+func WithRateLimiter(l RateLimiter) Option {
+	return func(s *server) { s.limit = l }
 }
 
 // Option configures NewRouter.
@@ -89,7 +105,7 @@ func NewRouter(flags flag.Store, users auth.Store, idem idempotency.Store, log *
 	// Only the requester; see flag.Store.CancelChangeRequest.
 	route("POST /api/v1/requests/{id}/cancel", auth.RoleViewer, s.cancelRequest)
 	// Open to any user or SDK key.
-	api.HandleFunc("POST /api/v1/evaluate", s.evaluate)
+	api.Handle("POST /api/v1/evaluate", s.rateLimited(http.HandlerFunc(s.evaluate)))
 
 	// Every user manages their own tokens.
 	route("GET /api/v1/me", auth.RoleViewer, s.getMe)
@@ -142,6 +158,9 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 type principal struct {
 	user   *auth.User
 	sdkEnv string
+	// client identifies the caller for rate limiting: the user, however
+	// they signed in, or the SDK key (by hash, never the secret).
+	client string
 }
 
 type principalKey struct{}
@@ -169,6 +188,7 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 			hash := auth.HashSecret(secret)
 			if strings.HasPrefix(secret, auth.SDKKeyPrefix) {
 				p.sdkEnv, err = s.users.AuthenticateSDKKey(r.Context(), hash)
+				p.client = "sdk:" + hex.EncodeToString(hash[:12])
 			} else {
 				var u auth.User
 				u, err = s.users.Authenticate(r.Context(), hash)
@@ -194,6 +214,9 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 			s.fail(w, r, err)
 			return
 		}
+		if p.user != nil {
+			p.client = "user:" + p.user.Handle
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 	})
 }
@@ -201,6 +224,31 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 func unauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	writeError(w, http.StatusUnauthorized, "missing or invalid credentials")
+}
+
+// rateLimited applies the rate limiter, if there is one. Every response
+// says how much of the limit is left; over it, the answer is 429.
+func (s *server) rateLimited(next http.Handler) http.Handler {
+	if s.limit == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		res := s.limit.Allow(r.Context(), principalFrom(r).client)
+		if res.Known {
+			reset := strconv.Itoa(int(math.Ceil(res.Reset.Seconds())))
+			h := w.Header()
+			h.Set("RateLimit-Limit", strconv.Itoa(res.Limit))
+			h.Set("RateLimit-Remaining", strconv.Itoa(res.Remaining))
+			h.Set("RateLimit-Reset", reset)
+			if !res.Allowed {
+				h.Set("Retry-After", reset)
+				writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
+					"rate limit exceeded: %d evaluations per minute for this client; retry in %s seconds", res.Limit, reset))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireRole allows users with at least min's permissions. SDK keys
