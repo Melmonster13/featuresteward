@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { APIError, checkToken, checkURL, Client } from "./api";
+import { APIError, checkToken, checkURL, Client, plainText, validHandle } from "./api";
 
 describe("checkURL", () => {
   it.each(["https://flags.example.com", "https://flags.example.com:8443/", "http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080"])(
@@ -64,4 +64,23 @@ describe("Client", () => {
     const err = (await new Client("https://x", "fs_secret", failing).me().catch((e: unknown) => e)) as Error;
     expect(err.message).toBe("Couldn't reach https://x");
   });
+});
+
+describe("plainText", () => {
+  it("removes link and HTML syntax from server text", () => {
+    const out = plainText("Denied. [Fix it](command:workbench.action.terminal.new) <img src=x> `code`");
+    expect(out).not.toMatch(/[[\]<>`]/);
+    expect(out).toContain("Denied.");
+  });
+  it("keeps it short and on one line", () => expect(plainText(`a\n\nb ${"x".repeat(500)}`)).toHaveLength(200));
+});
+
+describe("validHandle", () => {
+  it.each(["sam", "melmel6", "a.b_c-d"])("accepts %s", (h) => expect(validHandle(h)).toBe(true));
+  it.each(["", "Sam", "[x](command:y)", "a b", 42, null])("rejects %j", (h) => expect(validHandle(h)).toBe(false));
+});
+
+it("strips links from server error messages", async () => {
+  const err = (await new Client("https://x", "fs_t", fakeFetch(403, { error: "[Click](command:evil)" })).me().catch((e: unknown) => e)) as Error;
+  expect(err.message).toBe("Click(command:evil)");
 });

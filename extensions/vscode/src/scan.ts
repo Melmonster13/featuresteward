@@ -28,6 +28,16 @@ export function findUses(text: string, keys: ReadonlySet<string>): Use[] {
 // code worth scanning.
 export const maxFileBytes = 1_000_000;
 
+// File types, matching vscode.FileType.
+export const fileType = { file: 1, symbolicLink: 64 } as const;
+
+// scannable says whether a file from the workspace is safe to read: a
+// regular file, not too big, and not a symlink. A repository could link
+// to /dev/zero or a file outside the workspace.
+export function scannable(stat: { type: number; size: number }): boolean {
+  return stat.type === fileType.file && stat.size <= maxFileBytes;
+}
+
 export function looksLikeText(bytes: Uint8Array): boolean {
   return bytes.length <= maxFileBytes && !bytes.subarray(0, 8000).includes(0);
 }

@@ -39,7 +39,7 @@ The status bar shows how many flags are loaded; click it to refresh. Flags also 
 - **FeatureSteward: Refresh Flags**
 - **FeatureSteward: Find Stale Flags**: search the workspace again for stale flags.
 
-The search skips `node_modules`, `.git`, common build folders, binary files, and files over 1 MB.
+The search skips `node_modules`, `.git`, common build folders, binary files, symlinks, and files over 1 MB.
 
 ## License
 

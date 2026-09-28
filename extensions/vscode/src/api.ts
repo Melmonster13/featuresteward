@@ -65,6 +65,17 @@ export function checkToken(value: string): string {
   return "";
 }
 
+// plainText makes text from the server safe to show in a notification,
+// which would otherwise render [text](link) as a link.
+export function plainText(text: string): string {
+  return text.replace(/[[\]<>`]/g, "").replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+// validHandle matches the server's rule for user handles.
+export function validHandle(handle: unknown): handle is string {
+  return typeof handle === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(handle);
+}
+
 export class APIError extends Error {
   constructor(
     readonly status: number,
@@ -121,7 +132,7 @@ async function errorMessage(res: Response): Promise<string> {
   if (res.status === 429) return "Rate limited by the server; try again in a minute";
   try {
     const body = (await res.json()) as { error?: unknown };
-    if (typeof body.error === "string" && body.error) return body.error.slice(0, 200);
+    if (typeof body.error === "string" && body.error) return plainText(body.error);
   } catch {
     // Not JSON; fall through.
   }

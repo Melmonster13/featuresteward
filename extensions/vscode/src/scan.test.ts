@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findUses, looksLikeText, maxFileBytes } from "./scan";
+import { fileType, findUses, looksLikeText, maxFileBytes, scannable } from "./scan";
 
 describe("findUses", () => {
   const keys = new Set(["legacy-search", "dark-mode"]);
@@ -31,4 +31,15 @@ describe("looksLikeText", () => {
   it("accepts source code", () => expect(looksLikeText(new TextEncoder().encode("const a = 1;\n"))).toBe(true));
   it("rejects binary files", () => expect(looksLikeText(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 1]))).toBe(false));
   it("rejects huge files", () => expect(looksLikeText(new Uint8Array(maxFileBytes + 1).fill(0x61))).toBe(false));
+});
+
+describe("scannable", () => {
+  it("reads regular files", () => expect(scannable({ type: fileType.file, size: 100 })).toBe(true));
+  it.each([
+    ["symlinks to files", { type: fileType.file | fileType.symbolicLink, size: 100 }],
+    ["devices like /dev/zero", { type: 0, size: 0 }],
+    ["symlinks to devices", { type: fileType.symbolicLink, size: 0 }],
+    ["directories", { type: 2, size: 0 }],
+    ["huge files", { type: fileType.file, size: maxFileBytes + 1 }],
+  ])("skips %s", (_, stat) => expect(scannable(stat)).toBe(false));
 });

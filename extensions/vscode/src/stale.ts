@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { Flag } from "./api";
 import { staleLabel } from "./hover";
-import { findUses, looksLikeText, maxFileBytes, type Use } from "./scan";
+import { findUses, looksLikeText, scannable, type Use } from "./scan";
 
 // Folders that hold dependencies or build output, not your code.
 const skip = "**/{node_modules,.git,dist,out,build,vendor,bin,target,.venv,venv,__pycache__}/**";
@@ -141,7 +141,7 @@ export class StaleFlags implements vscode.TreeDataProvider<Node>, vscode.Disposa
 
 async function usesIn(uri: vscode.Uri, keys: ReadonlySet<string>): Promise<Use[]> {
   try {
-    if ((await vscode.workspace.fs.stat(uri)).size > maxFileBytes) return [];
+    if (!scannable(await vscode.workspace.fs.stat(uri))) return [];
     const bytes = await vscode.workspace.fs.readFile(uri);
     return looksLikeText(bytes) ? findUses(new TextDecoder().decode(bytes), keys) : [];
   } catch {

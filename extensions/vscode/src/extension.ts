@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { APIError, checkToken, checkURL, Client, type Environment, type Flag } from "./api";
+import { APIError, checkToken, checkURL, Client, validHandle, type Environment, type Flag } from "./api";
 import { openStringAt } from "./complete";
 import { hoverMarkdown, keyAt, staleLabel } from "./hover";
 import { StaleFlags } from "./stale";
@@ -187,7 +187,9 @@ async function signIn(): Promise<void> {
 
   let handle: string;
   try {
-    handle = (await new Client(url, token.trim()).me()).handle;
+    const me = await new Client(url, token.trim()).me();
+    if (!validHandle(me.handle)) throw new Error("The server's reply doesn't look like FeatureSteward");
+    handle = me.handle;
   } catch (err) {
     log.error(`Sign-in failed: ${message(err)}`);
     void vscode.window.showErrorMessage(`FeatureSteward: ${message(err)}`);
