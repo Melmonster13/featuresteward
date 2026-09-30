@@ -2,7 +2,7 @@
 
 > A self-hosted feature-flag and config service. Toggle features safely, roll out gradually, and know who's accountable for every flag.
 
-![status](https://img.shields.io/badge/status-in%20development-orange)
+![status](https://img.shields.io/badge/status-shipped-brightgreen)
 ![Go](https://img.shields.io/badge/Go-backend-00ADD8)
 ![TypeScript](https://img.shields.io/badge/TypeScript-frontend-3178C6)
 
