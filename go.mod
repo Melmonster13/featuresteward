@@ -1,6 +1,6 @@
 module github.com/Melmonster13/featuresteward
 
-go 1.27.1
+go 1.27.3
 
 tool (
 	github.com/pressly/goose/v3/cmd/goose
