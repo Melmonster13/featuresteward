@@ -13,9 +13,11 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Stay on Node LTS releases; odd-numbered majors never become LTS.
+      # Stay on the current Node LTS. A new major starts as a "Current"
+      # release and only becomes LTS months later (odd majors never do), so
+      # moving to the next LTS is a manual change to the Dockerfile and CI.
       - dependency-name: node
-        versions: ["23.x", "25.x", "27.x", "29.x"]
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /web
     schedule:
