@@ -172,12 +172,16 @@ code --install-extension featuresteward-0.1.0.vsix
 
 CI also builds the `.vsix` on every push; download it from the run's **Artifacts**.
 
+<!-- Maintainer only: publishing steps.
+
 **Publish it** (only the maintainer does this, and the tokens never go in the repo):
 
 1. Create a publisher at https://marketplace.visualstudio.com/manage whose ID matches `publisher` in `extensions/vscode/package.json`.
 2. Create an Azure DevOps personal access token with the **Marketplace (Manage)** scope, then run `npx vsce login <publisher>` and paste it at the prompt.
 3. Run `npx vsce publish` from `extensions/vscode`.
 4. For Open VSX (VSCodium, Cursor, and others), create a token at https://open-vsx.org, then run `read -rs OVSX_PAT && export OVSX_PAT` (paste it; nothing is shown), `npx ovsx create-namespace <publisher>` once, and `npx ovsx publish featuresteward-0.1.0.vsix`.
+
+-->
 
 ---
 
