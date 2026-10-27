@@ -295,6 +295,8 @@ Evaluations are counted in memory and saved to Postgres every minute, so recordi
 | `STALE_WEBHOOK_URL` | Optional webhook for a daily digest of stale flags, grouped by steward, as `{"text": ...}` (Slack-compatible). It's a secret: it's never logged. Must be `https`, except to `localhost`. | — |
 | `PUBLIC_URL` | The dashboard's URL, used for links in the digest. | — |
 
+**The database password in `docker-compose.yml` and `.env.example` is a local default, not a secret.** Postgres and Redis listen only on `127.0.0.1`, so only your machine can reach them. Before running FeatureSteward anywhere else, set `POSTGRES_PASSWORD` (and the matching `DATABASE_URL`) in `.env` and keep the database and Redis off public ports. Postgres keeps the password it was first created with, so set it before the first `docker compose up`.
+
 ---
 
 ## Project structure
