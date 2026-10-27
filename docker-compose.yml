@@ -13,15 +13,15 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: featuresteward
-      POSTGRES_PASSWORD: featuresteward
-      POSTGRES_DB: featuresteward
+      POSTGRES_USER: ${POSTGRES_USER:-featuresteward}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-featuresteward}
+      POSTGRES_DB: ${POSTGRES_DB:-featuresteward}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U featuresteward"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 2s
       retries: 15
 
