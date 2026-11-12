@@ -115,7 +115,7 @@
     "@types/vscode": "1.125.0",
     "@vscode/vsce": "4.0.0",
     "typescript": "7.0.2",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
   },
   "overrides": {
     "@azure/msal-node": "7.1.1"
